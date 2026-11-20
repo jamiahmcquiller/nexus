@@ -1,0 +1,27 @@
+[tool.poetry]
+name = "nexus-backend"
+version = "0.1.0"
+description = "NEXUS backend API"
+authors = ["Jamiah McQuiller"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+fastapi = "^0.115"
+uvicorn = {extras = ["standard"], version = "^0.32"}
+sqlalchemy = "^2.0"
+alembic = "^1.14"
+psycopg2-binary = "^2.9"
+pydantic = "^2.10"
+pydantic-settings = "^2.6"
+python-jose = {extras = ["cryptography"], version = "^3.3"}
+passlib = {extras = ["bcrypt"], version = "^1.7"}
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3"
+httpx = "^0.28"
+ruff = "^0.8"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
