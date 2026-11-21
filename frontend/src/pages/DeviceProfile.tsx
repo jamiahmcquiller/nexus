@@ -229,9 +229,9 @@ export default function DeviceProfile() {
           <Card>
             <CardHeader title="Security posture" subtitle="Reported by the agent at last check-in" />
             <div className="divide-y divide-slate-100">
-              {secItem('Disk encryption (BitLocker)', sec?.bitlocker, 'Protects data if the device is lost or stolen')}
-              {secItem('Windows Firewall', sec?.firewall, 'Blocks unwanted network connections')}
-              {secItem('Microsoft Defender', sec?.defender, 'Real-time antivirus protection')}
+              {secItem(`Disk encryption (${sec?.encryption_name ?? 'BitLocker'})`, sec?.bitlocker, 'Protects data if the device is lost or stolen')}
+              {secItem(a.platform === 'darwin' ? 'macOS Firewall' : 'Windows Firewall', sec?.firewall, 'Blocks unwanted network connections')}
+              {secItem(sec?.antivirus_name ?? 'Microsoft Defender', sec?.defender, 'Real-time protection against malware')}
             </div>
           </Card>
           <Card>

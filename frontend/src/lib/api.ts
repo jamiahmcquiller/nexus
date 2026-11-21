@@ -40,9 +40,10 @@ export type DeviceAttributes = {
   manufacturer?: string
   model?: string
   os?: { name?: string; version?: string; build?: string }
-  hardware?: { cpu?: string; ram_gb?: number; disk_total_gb?: number; disk_free_gb?: number }
+  hardware?: { cpu?: string; ram_gb?: number; disk_total_gb?: number; disk_free_gb?: number; architecture?: string }
   network?: { ip_address?: string; mac_address?: string }
-  security?: { bitlocker?: boolean; firewall?: boolean; defender?: boolean }
+  security?: { bitlocker?: boolean; firewall?: boolean; defender?: boolean; encryption_name?: string; antivirus_name?: string }
+  platform?: string
   software?: { name: string; publisher?: string; version?: string }[]
   warranty?: Warranty
 }

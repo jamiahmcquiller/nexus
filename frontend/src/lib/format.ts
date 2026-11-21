@@ -75,4 +75,6 @@ Object.assign(ACTIVITY_LABELS, {
   'risk.updated': 'Risk updated',
   'warranty.updated': 'Warranty updated',
   'warranty.imported': 'Warranty data imported',
+  'enrollment.code_created': 'Enrollment code created',
+  'device.online': 'Endpoint back online',
 })

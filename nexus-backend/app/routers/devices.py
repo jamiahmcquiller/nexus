@@ -73,14 +73,14 @@ def device_stats(db: Session = Depends(get_db), current_user: User = Depends(get
 
 
 @router.post("/enrollment-token")
-def create_enrollment_token(current_user: User = Depends(get_current_user)):
-    # MVP format, kept compatible with the agent: nexus-<tenant_uuid>-<random>.
-    # TODO(security): store hashed one-time tokens with expiry and issue per-device credentials.
-    token = f"nexus-{current_user.tenant_id}-{secrets.token_hex(8)}"
-    return {
-        "enrollment_token": token,
-        "install_command": f'nexus-agent.exe --server https://YOUR-NEXUS-ADDRESS --token {token}',
-    }
+def create_enrollment_token(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Issue an enrollment code. It works for 7 days and can enroll many devices; only its hash is stored."""
+    from .agent import issue_enrollment_token, TOKEN_TTL
+    token = issue_enrollment_token(db, current_user.tenant_id, current_user.username)
+    _audit(db, current_user.tenant_id, "enrollment.code_created", "organization", None,
+           {"actor": current_user.username}, actor=current_user.id)
+    db.commit()
+    return {"enrollment_token": token, "expires_in_days": TOKEN_TTL.days}
 
 
 @router.get("/{device_uuid}", response_model=DeviceDetail)
@@ -116,47 +116,8 @@ def device_activity(device_uuid: uuid.UUID, db: Session = Depends(get_db), curre
     ]
 
 
-@router.post("/enroll")
+@router.post("/enroll", include_in_schema=False)
 def enroll_device(req: EnrollRequest, db: Session = Depends(get_db)):
-    # MVP: simple token check (in production validate against stored one-time tokens)
-    if not req.enrollment_token.startswith("nexus-"):
-        raise HTTPException(status_code=400, detail="Invalid enrollment token")
-    # Extract tenant from token format: nexus-<tenant_uuid>-<random>
-    try:
-        # The tenant UUID itself contains dashes, so take the 36 characters after "nexus-"
-        tenant_id = uuid.UUID(req.enrollment_token[len("nexus-"):][:36])
-    except Exception:
-        raise HTTPException(status_code=400, detail="Malformed enrollment token")
-
-    device = db.query(Device).filter(Device.device_id == req.device_id).first()
-    is_new = device is None
-    if is_new:
-        device = Device(
-            tenant_id=tenant_id,
-            hostname=req.hostname,
-            device_id=req.device_id,
-            agent_version=req.agent_version,
-            attributes=req.attributes,
-            last_checkin_at=datetime.utcnow(),
-        )
-        db.add(device)
-        db.flush()
-    else:
-        device.hostname = req.hostname
-        device.agent_version = req.agent_version
-        device.attributes = req.attributes
-        device.last_checkin_at = datetime.utcnow()
-    _audit(db, device.tenant_id, "device.enrolled" if is_new else "device.reenrolled",
-           "device", device.id, {"hostname": req.hostname})
-    db.commit()
-    return {"status": "enrolled", "device_id": device.device_id}
-
-
-@router.post("/heartbeat")
-def heartbeat(device_id: str, db: Session = Depends(get_db)):
-    device = db.query(Device).filter(Device.device_id == device_id).first()
-    if not device:
-        raise HTTPException(status_code=404, detail="Device not found")
-    device.last_checkin_at = datetime.utcnow()
-    db.commit()
-    return {"status": "ok"}
+    """Legacy path kept for older agents; same checks as /api/v1/agent/enroll."""
+    from .agent import enroll as agent_enroll, EnrollIn
+    return agent_enroll(EnrollIn(**req.model_dump()), db)

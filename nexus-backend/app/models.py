@@ -262,3 +262,28 @@ class Risk(Base):
     treatment = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+# ---------------------------------------------------------------------------
+# Agent enrollment and credentials
+# ---------------------------------------------------------------------------
+class EnrollmentToken(Base):
+    """Enrollment codes issued from the console. Only a hash is stored."""
+    __tablename__ = "enrollment_tokens"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    token_hash = Column(String, nullable=False, unique=True)
+    created_by = Column(String)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False)
+    uses = Column(String, default="0")
+    revoked = Column(String, default="no")
+
+
+class DeviceCredential(Base):
+    """Per-device secret the agent uses to authenticate check-ins. Only a hash is stored."""
+    __tablename__ = "device_credentials"
+    device_id = Column(UUID(as_uuid=True), ForeignKey("devices.id"), primary_key=True)
+    key_hash = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    last_used_at = Column(DateTime)
