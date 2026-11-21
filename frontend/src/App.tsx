@@ -7,7 +7,7 @@ function App() {
   const [stats, setStats] = useState({ total: 0, online: 0, stale: 0 })
   const [devices, setDevices] = useState<any[]>([])
   const [token, setToken] = useState(localStorage.getItem('nexus_token') || '')
-  const [email, setEmail] = useState('')
+  const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
 
@@ -26,7 +26,7 @@ function App() {
 
   const login = async () => {
     try {
-      const res = await axios.post(`${API}/api/v1/auth/token`, { email, password })
+      const res = await axios.post(`${API}/api/v1/auth/token`, { username, password })
       const t = res.data.access_token
       setToken(t)
       localStorage.setItem('nexus_token', t)
@@ -40,7 +40,7 @@ function App() {
     try {
       const res = await axios.post(`${API}/api/v1/auth/register`, {
         tenant_name: 'Demo Organization',
-        email,
+        username,
         password,
       })
       const t = res.data.access_token
@@ -59,7 +59,7 @@ function App() {
           <h1 className="text-2xl font-semibold mb-2">NEXUS</h1>
           <p className="text-sm text-gray-500 mb-6">Sign in to the console</p>
           {error && <p className="text-red-600 text-sm mb-4">{error}</p>}
-          <input className="w-full border p-2 mb-3 rounded" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} />
+          <input className="w-full border p-2 mb-3 rounded" placeholder="Username" value={username} onChange={e => setUsername(e.target.value)} />
           <input className="w-full border p-2 mb-4 rounded" type="password" placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} />
           <button className="w-full bg-blue-600 text-white p-2 rounded mb-2" onClick={login}>Sign In</button>
           <button className="w-full border p-2 rounded" onClick={register}>Create Organization</button>

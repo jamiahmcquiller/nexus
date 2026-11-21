@@ -15,11 +15,11 @@ class User(Base):
     __tablename__ = "users"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
-    email = Column(String, nullable=False)
+    username = Column(String, nullable=False)
     hashed_password = Column(String, nullable=False)
     role = Column(String, default="technician")  # owner, admin, technician, auditor
     created_at = Column(DateTime, default=datetime.utcnow)
-    __table_args__ = (Index("ix_users_tenant_email", "tenant_id", "email", unique=True),)
+    __table_args__ = (Index("ix_users_tenant_username", "tenant_id", "username", unique=True),)
 
 class Device(Base):
     __tablename__ = "devices"
