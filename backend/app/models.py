@@ -68,6 +68,6 @@ class AuditEvent(Base):
     action = Column(String, nullable=False)
     entity_type = Column(String)
     entity_id = Column(UUID(as_uuid=True))
-    metadata = Column(JSON)
+    event_metadata = Column(JSON)
     occurred_at = Column(DateTime, default=datetime.utcnow)
     __table_args__ = (Index("ix_audit_tenant_time", "tenant_id", "occurred_at"),)
