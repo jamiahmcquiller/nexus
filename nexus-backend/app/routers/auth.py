@@ -7,6 +7,26 @@ from ..auth import verify_password, create_access_token, get_password_hash, get_
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
+# Administrator workspaces. One sign-in, one JWT, two workspaces:
+# an authorized user switches between them without signing in again.
+# The server is the source of truth for which workspaces a role may
+# open; the console only renders what this endpoint returns.
+#   owner / admin  -> both workspaces
+#   technician     -> IT Operations only
+#   auditor        -> Security Operations only
+# Any other / unknown role gets no administrator workspace.
+WORKSPACE_ACCESS: dict[str, list[str]] = {
+    "owner": ["operations", "security"],
+    "admin": ["operations", "security"],
+    "technician": ["operations"],
+    "auditor": ["security"],
+}
+
+
+def workspaces_for_role(role: str) -> list[str]:
+    """Administrator workspaces a role is authorized to open."""
+    return list(WORKSPACE_ACCESS.get((role or "").lower(), []))
+
 class Token(BaseModel):
     access_token: str
     token_type: str
@@ -56,4 +76,22 @@ def me(current_user: User = Depends(get_current_user)):
         "username": current_user.username,
         "role": current_user.role,
         "tenant_id": str(current_user.tenant_id),
+        "workspaces": workspaces_for_role(current_user.role),
+    }
+
+
+@router.get("/workspaces")
+def workspaces(current_user: User = Depends(get_current_user)):
+    """Administrator workspaces the signed-in user may open.
+
+    The same access token authorizes both workspaces — switching
+    workspaces in the console never requires signing in again.
+    A user with no authorized workspace gets an empty list and the
+    console shows that plainly instead of guessing.
+    """
+    return {
+        "username": current_user.username,
+        "role": current_user.role,
+        "tenant_id": str(current_user.tenant_id),
+        "workspaces": workspaces_for_role(current_user.role),
     }

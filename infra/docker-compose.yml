@@ -3,7 +3,15 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: nexus
-      POSTGRES_PASSWORD: nexus_dev
+      # Fail fast when the secret is missing — never silently fall back
+      # to a hardcoded password. Values come from infra/.env (see
+      # infra/.env.example; scripts/start-nexus.sh generates it).
+      # MIGRATION: if this stack already has a postgres_data volume, the
+      # database was initialized with whatever password was in effect
+      # then (previously the hardcoded dev value). Put THAT password in
+      # infra/.env or Postgres will refuse to start; rotate it
+      # separately, never by editing this file.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in infra/.env (see infra/.env.example)}
       POSTGRES_DB: nexus
     ports:
       - "5432:5432"
@@ -19,6 +27,56 @@ services:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+
+  # API — FastAPI console + platform APIs.
+  backend:
+    build:
+      context: ../nexus-backend
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql+psycopg://nexus:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in infra/.env}@postgres:5432/nexus
+      SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in infra/.env (see infra/.env.example)}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+  # Console — Vite dev server. Its /api proxy forwards to the backend
+  # service (VITE_BACKEND_URL), so the browser only ever talks to
+  # this origin — no separate -8000 port to forward in Codespaces.
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    environment:
+      VITE_BACKEND_URL: http://backend:8000
+    ports:
+      - "5173:5173"
+    depends_on:
+      backend:
+        condition: service_started
+
+  # Scheduler worker — runs patch deployments, threat hunts, remediation
+  # workflows, and expiry housekeeping. Run exactly one replica: two
+  # workers would both advance the same records (harmless by design,
+  # but it would double the AuditEvents). See docs/scheduler.md.
+  worker:
+    build:
+      context: ../nexus-backend
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql+psycopg://nexus:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in infra/.env}@postgres:5432/nexus
+      SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in infra/.env (see infra/.env.example)}
+      SCHEDULER_INTERVAL_SECONDS: "60"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    command: ["python", "-m", "app.worker"]
+    restart: unless-stopped
 
 volumes:
   postgres_data:

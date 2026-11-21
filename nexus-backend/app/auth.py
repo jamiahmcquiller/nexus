@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime, timedelta
 from typing import Optional
 from jose import JWTError, jwt
@@ -31,10 +32,14 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     )
     try:
         payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
-        user_id: str = payload.get("sub")
-        if user_id is None:
+        user_id_raw = payload.get("sub")
+        if user_id_raw is None:
             raise credentials_exception
-    except JWTError:
+        # The JWT stores the id as a string; parse it to a UUID before
+        # filtering the UUID column. Postgres tolerated the string,
+        # SQLite does not — and a malformed sub is a bad credential.
+        user_id = uuid.UUID(str(user_id_raw))
+    except (JWTError, ValueError, AttributeError):
         raise credentials_exception
     user = db.query(User).filter(User.id == user_id).first()
     if user is None:

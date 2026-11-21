@@ -1,3 +1,91 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Manrope:wght@600;700;800&display=swap');
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/*
+ * NEXUS Service — centralized design tokens.
+ * Light mode is the primary palette (Midnight Navy / Teal /
+ * Cloud Gray / White). Dark mode adjusts the same palette:
+ * navy/charcoal surfaces, teal accents kept, status colors kept
+ * so their meaning never changes. Density is a data attribute
+ * on the app root: compact / comfortable / spacious.
+ */
+:root {
+  --nexus-navy: #142B4A;
+  --nexus-navy-light: #1D3A5F;
+  --nexus-teal: #167C80;
+  --nexus-teal-dark: #0F5E62;
+  --nexus-cloud: #F5F7FA;
+  --nexus-white: #FFFFFF;
+  --nexus-slate: #667085;
+  --nexus-slate-dark: #344054;
+  --nexus-border: #E5EAF0;
+  --nexus-success: #218568;
+  --nexus-warning: #D99536;
+  --nexus-critical: #C64D4D;
+  --nexus-info: #3D6C9A;
+  --nexus-pending: #7959C7;
+
+  --surface: #FFFFFF;
+  --surface-muted: #F5F7FA;
+  --app-bg: #F5F7FA;
+  --text: #344054;
+  --text-muted: #667085;
+  --input-bg: #FFFFFF;
+  --row-hover: #F1F5F9;
+  --card-shadow: 0 1px 2px rgba(20, 43, 74, 0.06);
+  --pad-card: 1.5rem;
+  --pad-row: 0.5rem;
+}
+
+.dark {
+  --surface: #16283F;
+  --surface-muted: #1D3A5F;
+  --app-bg: #0E1F36;
+  --text: #E6EBF2;
+  --text-muted: #8AA0B8;
+  --input-bg: #16283F;
+  --row-hover: #1D3A5F;
+  --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+
+[data-density='compact'] { --pad-card: 1rem; --pad-row: 0.25rem; }
+[data-density='comfortable'] { --pad-card: 1.5rem; --pad-row: 0.5rem; }
+[data-density='spacious'] { --pad-card: 2rem; --pad-row: 0.75rem; }
+
+body {
+  font-family: Inter, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  background: var(--app-bg);
+  color: var(--text);
+}
+
+h1, h2, h3 { font-family: Manrope, Inter, system-ui, sans-serif; }
+
+/* Visible keyboard focus everywhere — part of the brand QA bar. */
+:focus-visible {
+  outline: 2px solid var(--nexus-teal);
+  outline-offset: 2px;
+}
+
+/* Shared surfaces: cards, inputs, and tables read the tokens above,
+   so a theme or density change applies to every screen at once. */
+.nexus-card {
+  background: var(--surface);
+  border: 1px solid var(--nexus-border);
+  border-radius: 0.5rem;
+  box-shadow: var(--card-shadow);
+  padding: var(--pad-card);
+}
+.dark .nexus-card { border-color: #243A56; }
+
+.nexus-input {
+  background: var(--input-bg);
+  border: 1px solid var(--nexus-border);
+  border-radius: 0.375rem;
+  color: var(--text);
+  width: 100%;
+}
+.nexus-input::placeholder { color: var(--text-muted); }
+
+.nexus-table-row:hover { background: var(--row-hover); }

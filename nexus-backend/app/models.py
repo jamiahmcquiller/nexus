@@ -30,6 +30,9 @@ class Device(Base):
     enrollment_status = Column(String, default="enrolled")
     agent_version = Column(String)
     last_checkin_at = Column(DateTime)
+    # SHA-256 of the per-device credential issued at enrollment. The
+    # plaintext token is shown to the agent once and never stored.
+    device_token_hash = Column(String, nullable=True)
     attributes = Column(JSON, default=dict)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
