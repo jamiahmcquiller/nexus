@@ -44,4 +44,28 @@ export type DeviceAttributes = {
   network?: { ip_address?: string; mac_address?: string }
   security?: { bitlocker?: boolean; firewall?: boolean; defender?: boolean }
   software?: { name: string; publisher?: string; version?: string }[]
+  warranty?: Warranty
+}
+
+export type Warranty = {
+  provider?: string
+  coverage?: string
+  start_date?: string
+  end_date?: string
+  purchase_date?: string
+  order_number?: string
+  notes?: string
+  source?: string
+  status?: 'active' | 'expiring' | 'expired' | 'unknown'
+  days_left?: number | null
+}
+
+export type DeviceBrief = {
+  id: string
+  hostname: string | null
+  department?: string
+  assigned_user?: string
+  os?: string
+  online: boolean
+  last_checkin_at: string | null
 }

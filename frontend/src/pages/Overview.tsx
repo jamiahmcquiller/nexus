@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useOutletContext } from 'react-router-dom'
-import { Monitor, Wifi, ShieldAlert, PackageCheck, Plus, FolderPlus, ChevronRight, AlertTriangle, Activity } from 'lucide-react'
+import { Monitor, Wifi, ShieldAlert, PackageCheck, Plus, FolderPlus, ChevronRight, AlertTriangle, Activity, LifeBuoy, CalendarClock } from 'lucide-react'
 import { api } from '../lib/api'
 import { ACTIVITY_LABELS, timeAgo } from '../lib/format'
 import { Card, CardHeader, PageHeader, Button, Loading, EmptyState, Badge } from '../components/ui'
@@ -14,6 +14,8 @@ type OverviewData = {
   attention: { id: string; hostname: string; last_checkin_at: string | null }[]
   vulnerabilities: number | null
   patch_compliance: number | null
+  open_tickets?: number
+  warranty_attention?: number
 }
 
 function Kpi({ icon: Icon, label, value, sub, accent, pending }: {
@@ -72,10 +74,23 @@ export default function Overview() {
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Kpi icon={Monitor} label="Managed devices" value={total.toLocaleString()} sub="Total enrolled" accent="bg-slate-100 text-navy" />
         <Kpi icon={Wifi} label="Online devices" value={online.toLocaleString()} sub={total ? `${pct}% online` : 'No devices yet'} accent="bg-emerald-50 text-emerald-600" />
-        <Kpi icon={ShieldAlert} label="Vulnerabilities" value={data.vulnerabilities?.toLocaleString() ?? 'n/a'}
-          sub={data.vulnerabilities === null ? 'Scanning arrives in Phase 2' : 'Open findings'} accent="bg-red-50 text-red-500" pending={data.vulnerabilities === null} />
-        <Kpi icon={PackageCheck} label="Patch compliance" value={data.patch_compliance === null ? 'n/a' : `${data.patch_compliance}%`}
-          sub={data.patch_compliance === null ? 'Patching arrives in Phase 3' : 'Current status'} accent="bg-teal-50 text-teal" pending={data.patch_compliance === null} />
+        <Link to="/vulnerabilities"><Kpi icon={ShieldAlert} label="Vulnerabilities" value={data.vulnerabilities?.toLocaleString() ?? 'n/a'}
+          sub="Open findings" accent="bg-red-50 text-red-500" /></Link>
+        <Link to="/patches"><Kpi icon={PackageCheck} label="Patch compliance" value={data.patch_compliance === null ? 'n/a' : `${data.patch_compliance}%`}
+          sub={data.patch_compliance === null ? 'No approved patches yet' : 'Approved patches installed'} accent="bg-teal-50 text-teal" pending={data.patch_compliance === null} /></Link>
+      </div>
+
+      <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <Link to="/service-desk"><Card className="flex items-center gap-4 p-4 hover:border-teal">
+          <span className="grid h-9 w-9 place-items-center rounded-lg bg-slate-100 text-navy"><LifeBuoy size={18} /></span>
+          <div className="flex-1"><p className="text-sm text-slate-500">Open service desk tickets</p><p className="text-lg font-semibold text-slate-900">{data.open_tickets ?? 0}</p></div>
+          <ChevronRight size={16} className="text-slate-300" />
+        </Card></Link>
+        <Link to="/endpoints/warranty"><Card className="flex items-center gap-4 p-4 hover:border-teal">
+          <span className="grid h-9 w-9 place-items-center rounded-lg bg-amber-50 text-amber-600"><CalendarClock size={18} /></span>
+          <div className="flex-1"><p className="text-sm text-slate-500">Warranties expired or ending within 90 days</p><p className="text-lg font-semibold text-slate-900">{data.warranty_attention ?? 0}</p></div>
+          <ChevronRight size={16} className="text-slate-300" />
+        </Card></Link>
       </div>
 
       <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-3">
@@ -150,7 +165,7 @@ export default function Overview() {
                   <span className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-teal-50 text-teal"><Activity size={13} /></span>
                   <div className="min-w-0 flex-1">
                     <p className="text-sm text-slate-800">{ACTIVITY_LABELS[a.action] ?? a.action}</p>
-                    <p className="text-xs text-slate-500 truncate">{a.metadata.hostname ?? a.metadata.name ?? ''}</p>
+                    <p className="text-xs text-slate-500 truncate">{String(a.metadata.hostname ?? a.metadata.name ?? a.metadata.number ?? '')}</p>
                   </div>
                   <span className="shrink-0 text-xs text-slate-400">{timeAgo(a.occurred_at)}</span>
                 </li>

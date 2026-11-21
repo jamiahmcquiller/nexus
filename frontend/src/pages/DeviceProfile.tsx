@@ -1,9 +1,15 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
-import { ArrowLeft, Monitor, Cpu, MemoryStick, HardDrive, Network, ShieldCheck, ShieldX, Search, Activity } from 'lucide-react'
+import { Link, useNavigate, useParams } from 'react-router-dom'
+import { ArrowLeft, Monitor, Cpu, MemoryStick, HardDrive, Network, ShieldCheck, ShieldX, Search, Activity, Pencil, LifeBuoy, Flame } from 'lucide-react'
 import { api, type Device } from '../lib/api'
-import { ACTIVITY_LABELS, formatDate, timeAgo, isOnline } from '../lib/format'
-import { Card, CardHeader, StatusBadge, Loading, EmptyState, Badge } from '../components/ui'
+import { ACTIVITY_LABELS, formatDate, formatDay, timeAgo, isOnline } from '../lib/format'
+import { Card, CardHeader, StatusBadge, Loading, EmptyState, Badge, Button, SeverityBadge, Table, Td } from '../components/ui'
+import { WarrantyModal, WARRANTY_TONE, warrantyLabel } from './Warranty'
+import { NewTicket } from './ServiceDesk'
+import { parseDate } from '../lib/warranty'
+
+type DevVuln = { id: string; cve_id: string; title: string; severity: string; cvss: number | null; known_exploited: boolean; product: string; fixed_version: string; status: string; first_detected: string }
+type DevPatch = { id: string; kb_id: string; title: string; severity: string; approval: string; status: string; updated_at: string }
 
 const TABS = ['Overview', 'Hardware', 'Software', 'Security', 'Activity'] as const
 type Tab = typeof TABS[number]
@@ -40,11 +46,19 @@ export default function DeviceProfile() {
   const [tab, setTab] = useState<Tab>('Overview')
   const [activity, setActivity] = useState<{ action: string; occurred_at: string; metadata: Record<string, string> }[] | null>(null)
   const [swQuery, setSwQuery] = useState('')
+  const [vulns, setVulns] = useState<DevVuln[]>([])
+  const [patches, setPatches] = useState<DevPatch[]>([])
+  const [editWarranty, setEditWarranty] = useState(false)
+  const [newTicket, setNewTicket] = useState(false)
+  const navigate = useNavigate()
 
-  useEffect(() => {
+  const load = () => {
     api.get(`/devices/${id}`).then(r => setDevice(r.data)).catch(() => setMissing(true))
     api.get(`/devices/${id}/activity`).then(r => setActivity(r.data)).catch(() => setActivity([]))
-  }, [id])
+    api.get(`/vulnerabilities/device/${id}`).then(r => setVulns(r.data)).catch(() => {})
+    api.get(`/patches/device/${id}`).then(r => setPatches(r.data)).catch(() => {})
+  }
+  useEffect(() => { load() }, [id])
 
   const software = useMemo(() => {
     const q = swQuery.toLowerCase()
@@ -57,6 +71,8 @@ export default function DeviceProfile() {
   if (!device) return <Loading />
 
   const a = device.attributes ?? {}
+  const w = parseDate(a.warranty)
+  const openVulns = vulns.filter(v => v.status === 'open').length
   const hw = a.hardware ?? {}
   const sec = a.security
   const diskUsedPct = hw.disk_total_gb && hw.disk_free_gb !== undefined
@@ -92,6 +108,7 @@ export default function DeviceProfile() {
               {[a.manufacturer && `${a.manufacturer} ${a.model ?? ''}`.trim(), a.os?.name].filter(Boolean).join(' · ') || device.device_id}
             </p>
           </div>
+          <Button variant="secondary" onClick={() => setNewTicket(true)}><LifeBuoy size={15} />Open ticket</Button>
           <div className="text-right text-sm">
             <p className="text-slate-500">Last check-in</p>
             <p className={`font-medium ${isOnline(device.last_checkin_at) ? 'text-slate-900' : 'text-amber-600'}`}>{timeAgo(device.last_checkin_at)}</p>
@@ -110,6 +127,7 @@ export default function DeviceProfile() {
           <button key={t} onClick={() => setTab(t)}
             className={`-mb-px border-b-2 px-3 py-2 text-sm ${tab === t ? 'border-teal font-medium text-teal' : 'border-transparent text-slate-500 hover:text-slate-800'}`}>
             {t}{t === 'Software' && a.software ? <span className="ml-1.5 text-xs text-slate-400">{a.software.length}</span> : null}
+            {t === 'Security' && openVulns > 0 ? <span className="ml-1.5 rounded-full bg-red-100 px-1.5 text-xs text-red-700">{openVulns}</span> : null}
           </button>
         ))}
       </div>
@@ -137,6 +155,17 @@ export default function DeviceProfile() {
               ['Enrolled', formatDate(device.created_at)],
               ['Enrollment', <Badge tone="teal">{device.enrollment_status === 'enrolled' ? 'Active' : device.enrollment_status}</Badge>],
             ]} />
+          </Card>
+          <Card className="xl:col-span-2">
+            <CardHeader title="Warranty" subtitle={w.source ? `Source: ${w.source === 'sample' ? 'sample data' : w.source}` : undefined}
+              action={<Button variant="secondary" className="py-1.5 text-xs" onClick={() => setEditWarranty(true)}><Pencil size={13} />Edit</Button>} />
+            <div className="grid grid-cols-2 gap-4 p-5 md:grid-cols-5">
+              <div><p className="text-xs text-slate-500">Status</p><div className="mt-1"><Badge tone={WARRANTY_TONE[w.status ?? 'unknown']}>{warrantyLabel(w)}</Badge></div></div>
+              <div><p className="text-xs text-slate-500">Provider</p><p className="mt-1 text-sm text-slate-900">{w.provider ?? 'Not set'}</p></div>
+              <div><p className="text-xs text-slate-500">Coverage</p><p className="mt-1 text-sm text-slate-900">{w.coverage ?? 'Not set'}</p></div>
+              <div><p className="text-xs text-slate-500">Start</p><p className="mt-1 text-sm text-slate-900">{formatDay(w.start_date)}</p></div>
+              <div><p className="text-xs text-slate-500">End</p><p className="mt-1 text-sm text-slate-900">{formatDay(w.end_date)}</p></div>
+            </div>
           </Card>
         </div>
       )}
@@ -206,9 +235,34 @@ export default function DeviceProfile() {
             </div>
           </Card>
           <Card>
-            <CardHeader title="Vulnerabilities & patches" />
-            <EmptyState icon={<ShieldCheck size={20} />} title="Coming in Phase 2"
-              body="Vulnerability findings, missing patches, and policy status for this device will appear here." />
+            <CardHeader title="Patches" subtitle={`${patches.filter(p => p.status === 'installed').length} of ${patches.length} installed`} />
+            {patches.length === 0 ? <EmptyState title="No patches tracked" body="Patches that apply to this device show up here." /> : (
+              <ul className="divide-y divide-slate-100">
+                {patches.map(p => (
+                  <li key={p.id} className="flex items-center gap-3 px-5 py-2.5 text-sm">
+                    <div className="min-w-0 flex-1"><p className="truncate text-slate-900">{p.title}</p><p className="font-mono text-xs text-slate-500">{p.kb_id}</p></div>
+                    <Badge tone={p.status === 'installed' ? 'green' : p.status === 'failed' ? 'red' : 'amber'}><span className="capitalize">{p.status}</span></Badge>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+          <Card className="xl:col-span-2">
+            <CardHeader title="Vulnerabilities" subtitle={`${openVulns} open on this device`} />
+            {vulns.length === 0 ? <EmptyState icon={<ShieldCheck size={20} />} title="No vulnerabilities found" body="Nothing known affects this device right now." /> : (
+              <Table head={['Vulnerability', 'Severity', 'Product', 'Fix', 'Status']}>
+                {vulns.map(v => (
+                  <tr key={v.id} className="cursor-pointer hover:bg-slate-50" onClick={() => navigate(`/vulnerabilities/${v.id}`)}>
+                    <Td first><p className="font-mono text-xs text-slate-500">{v.cve_id}</p><p className="text-slate-900">{v.title}</p>
+                      {v.known_exploited && <span className="inline-flex items-center gap-1 text-xs text-red-600"><Flame size={11} />Exploited in the wild</span>}</Td>
+                    <Td><SeverityBadge value={v.severity} /></Td>
+                    <Td className="text-slate-600">{v.product}</Td>
+                    <Td className="text-xs text-slate-600">{v.fixed_version}</Td>
+                    <Td><Badge tone={v.status === 'open' ? 'red' : v.status === 'remediated' ? 'green' : 'gray'}>{v.status === 'remediated' ? 'Fixed' : v.status === 'accepted' ? 'Risk accepted' : 'Open'}</Badge></Td>
+                  </tr>
+                ))}
+              </Table>
+            )}
           </Card>
         </div>
       )}
@@ -231,6 +285,8 @@ export default function DeviceProfile() {
           )}
         </Card>
       )}
+      {editWarranty && <WarrantyModal row={{ id: device.id, hostname: device.hostname, warranty: a.warranty }} onClose={() => setEditWarranty(false)} onDone={() => { setEditWarranty(false); load() }} />}
+      <NewTicket open={newTicket} deviceId={device.id} onClose={() => setNewTicket(false)} onDone={tid => navigate(`/service-desk/${tid}`)} />
     </>
   )
 }

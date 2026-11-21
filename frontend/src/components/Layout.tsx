@@ -11,13 +11,13 @@ type NavItem = { to: string; label: string; icon: typeof Monitor; soon?: boolean
 const WORKSPACE: NavItem[] = [
   { to: '/', label: 'Overview', icon: LayoutDashboard },
   { to: '/endpoints', label: 'Endpoint Management', icon: Monitor },
-  { to: '/patches', label: 'Patch Management', icon: PackageCheck, soon: true },
-  { to: '/vulnerabilities', label: 'Vulnerability Management', icon: ShieldAlert, soon: true },
-  { to: '/software', label: 'Software Management', icon: AppWindow, soon: true },
-  { to: '/service-desk', label: 'Service Desk', icon: LifeBuoy, soon: true },
-  { to: '/automation', label: 'Automation', icon: Workflow, soon: true },
-  { to: '/compliance', label: 'Security & Compliance', icon: ShieldCheck, soon: true },
-  { to: '/reports', label: 'Reports', icon: BarChart3, soon: true },
+  { to: '/patches', label: 'Patch Management', icon: PackageCheck },
+  { to: '/vulnerabilities', label: 'Vulnerability Management', icon: ShieldAlert },
+  { to: '/software', label: 'Software Management', icon: AppWindow },
+  { to: '/service-desk', label: 'Service Desk', icon: LifeBuoy },
+  { to: '/automation', label: 'Automation', icon: Workflow },
+  { to: '/compliance', label: 'Security & Compliance', icon: ShieldCheck },
+  { to: '/reports', label: 'Reports', icon: BarChart3 },
 ]
 
 const ADMIN: NavItem[] = [
@@ -25,7 +25,7 @@ const ADMIN: NavItem[] = [
   { to: '/admin/settings', label: 'Settings', icon: Settings, soon: true, adminOnly: true },
 ]
 
-export type Org = { name: string; user: { username: string; role: string } }
+export type Org = { name: string; has_sample_data?: boolean; user: { username: string; role: string } }
 
 function NavSection({ title, items, onNavigate }: { title: string; items: NavItem[]; onNavigate: () => void }) {
   return (
@@ -104,7 +104,7 @@ export default function Layout() {
 
   return (
     <div className="flex h-full">
-      <aside className="hidden lg:block w-64 shrink-0">{sidebar}</aside>
+      <aside className="hidden lg:block w-64 shrink-0 print:hidden">{sidebar}</aside>
 
       {mobileOpen && (
         <div className="fixed inset-0 z-40 lg:hidden">
@@ -115,7 +115,7 @@ export default function Layout() {
       )}
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-16 shrink-0 items-center gap-4 border-b border-slate-200 bg-white px-4 sm:px-6">
+        <header className="print:hidden flex h-16 shrink-0 items-center gap-4 border-b border-slate-200 bg-white px-4 sm:px-6">
           <button className="lg:hidden rounded-md p-1.5 text-slate-600 hover:bg-slate-100" onClick={() => setMobileOpen(true)}>
             <Menu size={20} />
           </button>
@@ -139,6 +139,11 @@ export default function Layout() {
             </button>
           </div>
         </header>
+        {org?.has_sample_data && (
+          <div className="border-b border-amber-200 bg-amber-50 px-6 py-2 text-xs text-amber-800 print:hidden">
+            This organization includes sample devices and data for demonstration. Real devices appear alongside them once the agent is installed.
+          </div>
+        )}
         <main className="flex-1 overflow-y-auto">
           <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
             <Outlet context={org} />

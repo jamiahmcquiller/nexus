@@ -5,7 +5,9 @@ from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 from ..database import get_db
-from ..models import Device, AuditEvent, User, Group, DeviceGroup, Tenant
+from ..models import Device, AuditEvent, User, Group, DeviceGroup, Tenant, DeviceVulnerability, Ticket
+from .patches import compliance_pct
+from .common import warranty_status
 from ..auth import get_current_user
 
 router = APIRouter(prefix="/api/v1", tags=["overview"])
@@ -52,16 +54,22 @@ def overview(db: Session = Depends(get_db), current_user: User = Depends(get_cur
             {"id": str(d.id), "hostname": d.hostname, "last_checkin_at": d.last_checkin_at}
             for d in stale
         ],
-        # Not built yet: these modules report null until they exist.
-        "vulnerabilities": None,
-        "patch_compliance": None,
+        "vulnerabilities": db.query(DeviceVulnerability).filter(
+            DeviceVulnerability.tenant_id == tid, DeviceVulnerability.status == "open").count(),
+        "patch_compliance": compliance_pct(db, tid),
+        "open_tickets": db.query(Ticket).filter(
+            Ticket.tenant_id == tid, Ticket.status.in_(("new", "in_progress", "waiting"))).count(),
+        "warranty_attention": sum(1 for d in devices
+                                  if warranty_status(d.attributes or {})["status"] in ("expiring", "expired")),
     }
 
 
 @router.get("/organization")
 def organization(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     tenant = db.query(Tenant).filter(Tenant.id == current_user.tenant_id).first()
+    sample = db.query(Device).filter(Device.tenant_id == current_user.tenant_id, Device.device_id.like("demo-%")).count()
     return {
+        "has_sample_data": sample > 0,
         "name": tenant.name if tenant else "",
         "user": {"username": current_user.username, "role": current_user.role},
     }

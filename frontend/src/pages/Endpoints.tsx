@@ -3,12 +3,15 @@ import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-do
 import { Search, Plus, Download, Monitor, ArrowUpDown, ChevronRight } from 'lucide-react'
 import { api, type Device } from '../lib/api'
 import { isOnline, timeAgo, parseUtc } from '../lib/format'
-import { Card, PageHeader, Button, StatusBadge, Loading, EmptyState } from '../components/ui'
+import { Card, PageHeader, Button, StatusBadge, Loading, EmptyState, Badge } from '../components/ui'
+import { WARRANTY_TONE, warrantyLabel } from './Warranty'
+import { parseDate } from '../lib/warranty'
 
 export function EndpointTabs() {
   const tabs = [
     { to: '/endpoints', label: 'All devices' },
     { to: '/endpoints/groups', label: 'Groups' },
+    { to: '/endpoints/warranty', label: 'Warranty' },
     { to: '/endpoints/enroll', label: 'Enroll a device' },
   ]
   const path = useLocation().pathname
@@ -31,12 +34,12 @@ type StatusFilter = 'all' | 'online' | 'offline'
 type SortKey = 'hostname' | 'last_checkin' | 'manufacturer'
 
 function toCsv(rows: Device[]) {
-  const header = ['Hostname', 'Status', 'Department', 'Assigned user', 'Operating system', 'Manufacturer', 'Model', 'Serial number', 'IP address', 'Last check-in']
+  const header = ['Hostname', 'Status', 'Department', 'Assigned user', 'Operating system', 'Manufacturer', 'Model', 'Serial number', 'IP address', 'Last check-in', 'Warranty ends']
   const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`
   const lines = rows.map(d => {
     const a = d.attributes ?? {}
     return [d.hostname, isOnline(d.last_checkin_at) ? 'Online' : 'Offline', a.department, a.assigned_user, a.os?.name,
-      a.manufacturer, a.model, a.serial_number, a.network?.ip_address, parseUtc(d.last_checkin_at)?.toISOString()].map(esc).join(',')
+      a.manufacturer, a.model, a.serial_number, a.network?.ip_address, parseUtc(d.last_checkin_at)?.toISOString(), a.warranty?.end_date].map(esc).join(',')
   })
   return [header.map(esc).join(','), ...lines].join('\n')
 }
@@ -183,6 +186,7 @@ export default function Endpoints() {
                   <th className="py-3 pr-4">Assigned user</th>
                   <th className="py-3 pr-4">Operating system</th>
                   <th className="py-3 pr-4">Last check-in</th>
+                  <th className="py-3 pr-4">Warranty</th>
                   <th className="w-8" />
                 </tr>
               </thead>
@@ -209,6 +213,7 @@ export default function Endpoints() {
                       <td className="py-3 pr-4 text-slate-600">{a.assigned_user ?? 'Not reported'}</td>
                       <td className="py-3 pr-4 text-slate-600">{a.os?.name ?? 'Not reported'}</td>
                       <td className="py-3 pr-4 text-slate-600">{timeAgo(d.last_checkin_at)}</td>
+                      <td className="py-3 pr-4">{(() => { const w = parseDate(a.warranty); return <Badge tone={WARRANTY_TONE[w.status ?? 'unknown']}>{warrantyLabel(w)}</Badge> })()}</td>
                       <td className="pr-3 text-slate-300"><ChevronRight size={16} /></td>
                     </tr>
                   )
