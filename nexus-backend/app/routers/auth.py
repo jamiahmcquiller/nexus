@@ -22,20 +22,24 @@ class RegisterRequest(BaseModel):
 
 @router.post("/register", response_model=Token)
 def register(req: RegisterRequest, db: Session = Depends(get_db)):
-    # Create tenant + owner user
-    tenant = Tenant(name=req.tenant_name)
-    db.add(tenant)
-    db.flush()
-    user = User(
-        tenant_id=tenant.id,
-        username=req.username,
-        hashed_password=get_password_hash(req.password),
-        role="owner",
-    )
-    db.add(user)
-    db.commit()
-    token = create_access_token({"sub": str(user.id), "tenant_id": str(tenant.id)})
-    return {"access_token": token, "token_type": "bearer"}
+    try:
+        # Create tenant + owner user
+        tenant = Tenant(name=req.tenant_name)
+        db.add(tenant)
+        db.flush()
+        user = User(
+            tenant_id=tenant.id,
+            username=req.username,
+            hashed_password=get_password_hash(req.password),
+            role="owner",
+        )
+        db.add(user)
+        db.commit()
+        token = create_access_token({"sub": str(user.id), "tenant_id": str(tenant.id)})
+        return {"access_token": token, "token_type": "bearer"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Registration failed: {str(e)}")
 
 @router.post("/token", response_model=Token)
 def login(form_data: LoginRequest, db: Session = Depends(get_db)):
