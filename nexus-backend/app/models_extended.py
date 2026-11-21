@@ -877,8 +877,181 @@ class SchedulerRun(Base):
     created_at = _created()
 
 
+# ------------------------------------------------- GRC (governance, risk & compliance)
+# Enterprise GRC workspace (v0.5.0). Every table is tenant-scoped and
+# carries is_demo so demo data is always distinguishable from the
+# organization's own compliance data. Evidence stores a file
+# reference/name only — never file content.
+class GrcFramework(Base):
+    """A compliance framework / standard the organization tracks."""
+    __tablename__ = "grc_frameworks"
+    id = _id()
+    tenant_id = _tenant()
+    name = Column(String)
+    title = Column(String)
+    standard = Column(String)  # CIS v8, NIST CSF 2.0, ISO 27001, SOC 2, HIPAA, GDPR, PCI DSS, Cyber Essentials
+    version = Column(String)
+    owner = Column(String)
+    status = Column(String, default="draft")  # active, draft, retired
+    is_demo = Column(Boolean, default=False)
+    attributes = _attrs()
+    created_at = _created()
+
+
+class GrcControl(Base):
+    """One control inside a framework (e.g. CIS 1.1)."""
+    __tablename__ = "grc_controls"
+    id = _id()
+    tenant_id = _tenant()
+    framework_id = Column(UUID(as_uuid=True), ForeignKey("grc_frameworks.id"))
+    name = Column(String)
+    title = Column(String)
+    control_ref = Column(String)  # e.g. CIS 1.1
+    category = Column(String)  # domain / category, e.g. Identity, Network, Data
+    owner = Column(String)
+    status = Column(String, default="not_implemented")  # implemented, partial, not_implemented, not_applicable
+    is_demo = Column(Boolean, default=False)
+    attributes = _attrs()
+    created_at = _created()
+
+
+class GrcAssessment(Base):
+    """An assessment of a framework over a defined scope."""
+    __tablename__ = "grc_assessments"
+    id = _id()
+    tenant_id = _tenant()
+    framework_id = Column(UUID(as_uuid=True), ForeignKey("grc_frameworks.id"))
+    name = Column(String)
+    title = Column(String)
+    scope = Column(String)
+    assessor = Column(String)
+    due_at = Column(DateTime)
+    status = Column(String, default="planned")  # planned, in_progress, complete, draft
+    is_demo = Column(Boolean, default=False)
+    attributes = _attrs()
+    created_at = _created()
+
+
+class GrcEvidence(Base):
+    """Evidence for a control / framework. attributes hold the file
+    reference and file name only — never the file content."""
+    __tablename__ = "grc_evidence"
+    id = _id()
+    tenant_id = _tenant()
+    control_id = Column(UUID(as_uuid=True), ForeignKey("grc_controls.id"))
+    framework_id = Column(UUID(as_uuid=True), ForeignKey("grc_frameworks.id"))
+    name = Column(String)
+    title = Column(String)
+    evidence_type = Column(String)  # document, screenshot, log, attestation
+    uploaded_by = Column(String)
+    status = Column(String, default="pending_review")  # pending_review, approved, rejected, expired
+    is_demo = Column(Boolean, default=False)
+    attributes = _attrs()
+    created_at = _created()
+
+
+class GrcFinding(Base):
+    """A finding against a control / framework, with exception support."""
+    __tablename__ = "grc_findings"
+    id = _id()
+    tenant_id = _tenant()
+    control_id = Column(UUID(as_uuid=True), ForeignKey("grc_controls.id"))
+    framework_id = Column(UUID(as_uuid=True), ForeignKey("grc_frameworks.id"))
+    name = Column(String)
+    title = Column(String)
+    severity = Column(String)  # critical, high, medium, low
+    owner = Column(String)
+    status = Column(String, default="open")  # open, in_progress, remediated, accepted, closed
+    is_demo = Column(Boolean, default=False)
+    attributes = _attrs()
+    created_at = _created()
+
+
+class GrcRisk(Base):
+    """A risk-register entry. Score is likelihood x impact (1-25)."""
+    __tablename__ = "grc_risks"
+    id = _id()
+    tenant_id = _tenant()
+    name = Column(String)
+    title = Column(String)
+    category = Column(String)
+    likelihood = Column(Integer, default=3)  # 1-5
+    impact = Column(Integer, default=3)  # 1-5
+    owner = Column(String)
+    status = Column(String, default="open")  # open, mitigated, accepted, closed
+    is_demo = Column(Boolean, default=False)
+    attributes = _attrs()
+    created_at = _created()
+
+
+class GrcRemediation(Base):
+    """A remediation task, usually linked to a finding."""
+    __tablename__ = "grc_remediations"
+    id = _id()
+    tenant_id = _tenant()
+    finding_id = Column(UUID(as_uuid=True), ForeignKey("grc_findings.id"))
+    control_id = Column(UUID(as_uuid=True), ForeignKey("grc_controls.id"))
+    name = Column(String)
+    title = Column(String)
+    owner = Column(String)
+    due_at = Column(DateTime)
+    status = Column(String, default="planned")  # planned, in_progress, complete, overdue
+    is_demo = Column(Boolean, default=False)
+    attributes = _attrs()
+    created_at = _created()
+
+
+class GrcAudit(Base):
+    """A scheduled / in-progress / completed audit."""
+    __tablename__ = "grc_audits"
+    id = _id()
+    tenant_id = _tenant()
+    framework_id = Column(UUID(as_uuid=True), ForeignKey("grc_frameworks.id"))
+    name = Column(String)
+    title = Column(String)
+    auditor = Column(String)
+    scheduled_at = Column(DateTime)
+    status = Column(String, default="scheduled")  # scheduled, in_progress, complete, cancelled
+    is_demo = Column(Boolean, default=False)
+    attributes = _attrs()
+    created_at = _created()
+
+
+class GrcControlMapping(Base):
+    """A control mapped to an equivalent control in another framework."""
+    __tablename__ = "grc_control_mappings"
+    id = _id()
+    tenant_id = _tenant()
+    control_id = Column(UUID(as_uuid=True), ForeignKey("grc_controls.id"))
+    name = Column(String)
+    title = Column(String)
+    mapped_framework = Column(String)
+    mapped_control_ref = Column(String)
+    status = Column(String, default="mapped")  # mapped, gap, unmapped
+    is_demo = Column(Boolean, default=False)
+    attributes = _attrs()
+    created_at = _created()
+
+
+class GrcSetting(Base):
+    """A GRC workspace setting (key/value). value is a JSON column."""
+    __tablename__ = "grc_settings"
+    id = _id()
+    tenant_id = _tenant()
+    name = Column(String)
+    title = Column(String)
+    key = Column(String)
+    value = Column(JSON, default=dict)
+    status = Column(String, default="active")  # active, inactive
+    is_demo = Column(Boolean, default=False)
+    attributes = _attrs()
+    created_at = _created()
+
+
 ALL_EXTENDED_MODELS = [
     SchedulerRun,
+    GrcFramework, GrcControl, GrcAssessment, GrcEvidence, GrcFinding,
+    GrcRisk, GrcRemediation, GrcAudit, GrcControlMapping, GrcSetting,
     PatchDeployment, ThirdPartyApp, PatchTest,
     ZeroDayMitigation, SecurityConfiguration, WebServerHardening, HighRiskSoftware,
     EndpointTelemetry, ThreatHunt, IncidentResponse,

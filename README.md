@@ -97,6 +97,23 @@ One platform covering the full Endpoint Central-style feature set — see
 - **Assets, distribution, DEX, remote, imaging, config** — licenses / warranties / certificates / geo-fencing / USB, software distribution & metering, experience scoring & RCA, remote sessions, OS imaging, configuration profiles & scripts
 - **MDM, disk encryption, servers, reporting** — Android / iOS / iPadOS / macOS / Windows / ChromeOS / tvOS, BitLocker / FileVault escrow (references only), server lifecycle & patch windows, audit-ready reports
 
+## GRC workspace (v0.5.0)
+
+Governance, Risk & Compliance as a full enterprise module — see
+`docs/grc.md` for the endpoint table, models, and demo-data rules.
+Ten tenant-scoped resources under `/api/v1/grc/` (frameworks,
+controls, assessments, evidence, findings, risks, remediations,
+audits, mappings, settings) plus `GET /api/v1/grc/overview`, per-record
+history at `GET /api/v1/grc/{resource}/{id}/history`, workflow
+transitions (assessment start/complete, evidence approve/reject,
+finding remediate/accept, risk accept/mitigate, remediation/audit
+complete, framework activate/retire), and owner/admin-only
+`POST /api/v1/grc/seed-demo` / `clear-demo`. The console is
+`frontend/src/GrcWorkspace.tsx` — twelve categories, each a functional
+page with search, filters, sorting, pagination, detail + history, and
+add forms; demo rows carry a "Demo" pill and are never presented as
+organization data.
+
 ## Status
 
 - [x] Repository and foundational documentation
@@ -105,6 +122,7 @@ One platform covering the full Endpoint Central-style feature set — see
 - [x] Platform models, APIs, and console for all 17 feature areas (v0.2.0)
 - [x] Background scheduler / worker for deployments, hunts, and remediation workflows (v0.3.0 — see `docs/scheduler.md`; run `python -m app.worker`, or `docker compose -f infra/docker-compose.yml up -d` for API + worker)
 - [x] Two administrator workspaces + brand theme (v0.4.0 — see `docs/workspaces-and-theme.md`): IT Operations and Security Operations, separate navigation and home dashboards, switch on one sign-in, role-based authorization; Midnight Navy / Teal / Cloud Gray system, light/dark mode, density
+- [x] GRC workspace (v0.5.0 — see `docs/grc.md`): enterprise Governance, Risk & Compliance — frameworks, control library, assessments, evidence, findings & exceptions, risk register, remediation plans, compliance reports, audit schedule, control mapping, settings, with an overview, workflow transitions, AuditEvent history, and idempotent demo-data seeding/clearing (demo rows always flagged `is_demo`)
 - [ ] Go agent prototype (read-only inventory)
 - [ ] End-to-end enrollment flow
 - [ ] Vendor patch / CVE / threat-intel feed integrations

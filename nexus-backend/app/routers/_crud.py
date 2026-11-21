@@ -12,11 +12,12 @@ when both columns exist, so the console's generic add-box works everywhere.
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
 from ..database import get_db
-from ..models import User
+from ..models import AuditEvent, User
 
 
 def _columns(model):
@@ -33,6 +34,24 @@ def _serialize(row):
 
 def _apply_payload(row, payload: dict):
     cols = _columns(type(row))
+    # JSON payloads carry foreign keys as UUID strings; the postgresql
+    # UUID columns expect uuid.UUID objects (on SQLite a plain string
+    # fails at flush with "'str' object has no attribute 'hex'").
+    # Coerce valid UUID strings for UUID-typed columns only — every
+    # other value passes through exactly as before.
+    coerced = {}
+    for key, value in payload.items():
+        if (
+            isinstance(value, str)
+            and key in cols
+            and isinstance(cols[key].type, PG_UUID)
+        ):
+            try:
+                value = uuid.UUID(value)
+            except ValueError:
+                pass
+        coerced[key] = value
+    payload = coerced
     attrs = dict(getattr(row, "attributes", None) or {})
     # title / name interchange
     if "title" in payload and "name" in cols and "title" not in cols:
@@ -59,7 +78,24 @@ def _apply_payload(row, payload: dict):
     return row
 
 
-def crud_router(prefix: str, model, tag: str) -> APIRouter:
+def _audit(db, prefix: str, action: str, row, current_user, extra: dict | None = None):
+    """Write one AuditEvent. No-op when prefix is None (default)."""
+    if not prefix:
+        return
+    meta = {"title": getattr(row, "name", None) or getattr(row, "title", None)}
+    if extra:
+        meta.update(extra)
+    db.add(AuditEvent(
+        tenant_id=current_user.tenant_id,
+        actor_user_id=current_user.id,
+        action=f"{prefix}.{action}",
+        entity_type=prefix,
+        entity_id=row.id,
+        event_metadata=meta,
+    ))
+
+
+def crud_router(prefix: str, model, tag: str, audit_prefix: str | None = None) -> APIRouter:
     router = APIRouter(prefix=prefix, tags=[tag])
 
     @router.get("/")
@@ -90,6 +126,9 @@ def crud_router(prefix: str, model, tag: str) -> APIRouter:
         db.add(row)
         db.commit()
         db.refresh(row)
+        if audit_prefix:
+            _audit(db, audit_prefix, "created", row, current_user)
+            db.commit()
         return _serialize(row)
 
     @router.get("/{item_id}")
@@ -115,6 +154,10 @@ def crud_router(prefix: str, model, tag: str) -> APIRouter:
             _apply_payload(row, {"attributes": payload["attributes"]})
         db.commit()
         db.refresh(row)
+        if audit_prefix:
+            _audit(db, audit_prefix, "status_changed", row, current_user,
+                   {"status": row.status})
+            db.commit()
         return _serialize(row)
 
     return router

@@ -27,7 +27,7 @@ from .routers import (
     auth, devices, patches, vulnerabilities, alerts, policies, compliance,
     patching, vulnops, edr, malware, browser, appcontrol, dlp, access,
     assets, distribution, dex, remote, imaging, configmgmt, mdm,
-    encryption, servers, reporting, scheduler,
+    encryption, servers, reporting, scheduler, grc,
 )
 
 # Create tables
@@ -36,7 +36,7 @@ Base.metadata.create_all(bind=engine)
 app = FastAPI(
     title="NEXUS API",
     description="Unified IT Operations & Security Management Platform",
-    version="0.4.0",
+    version="0.5.0",
 )
 
 app.add_middleware(
@@ -76,6 +76,7 @@ app.include_router(encryption.router)
 app.include_router(servers.router)
 app.include_router(reporting.router)
 app.include_router(scheduler.router)
+app.include_router(grc.router)
 
 @app.get("/")
 async def root():
@@ -94,12 +95,12 @@ async def health():
 @app.get("/api/v1/status")
 async def status():
     return {
-        "version": "0.4.0",
-        "phase": "Workspaces + brand theme — two administrator workspaces (IT Operations, Security Operations) with separate nav and home dashboards, single sign-in switching, role-based workspace authorization, Midnight Navy / Teal theme; platform + scheduler — patch, vulnerability, EDR, malware, ransomware, browser, app control, DLP, secure access, assets, distribution, DEX, remote, imaging, config, MDM, encryption, servers, reporting, scheduler",
+        "version": "0.5.0",
+        "phase": "GRC workspace — frameworks, control library, assessments, evidence, findings & exceptions, risk register, remediation plans, compliance reports, audit schedule, control mapping, settings, with demo-data seeding and AuditEvent history; Workspaces + brand theme — two administrator workspaces (IT Operations, Security Operations) with separate nav and home dashboards, single sign-in switching, role-based workspace authorization, Midnight Navy / Teal theme; platform + scheduler — patch, vulnerability, EDR, malware, ransomware, browser, app control, DLP, secure access, assets, distribution, DEX, remote, imaging, config, MDM, encryption, servers, reporting, scheduler",
         "modules": [
             "patching", "vulnerabilities", "edr", "malware", "ransomware",
             "browser", "app-control", "dlp", "access", "assets",
             "distribution", "dex", "remote", "imaging", "config",
-            "mdm", "encryption", "servers", "reporting", "scheduler",
+            "mdm", "encryption", "servers", "reporting", "scheduler", "grc",
         ],
     }
