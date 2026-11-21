@@ -16,7 +16,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -259,3 +259,37 @@ def test_real_mac_survives_seed_and_clear_demo(db_engine):
     assert mac_after_clear.hostname == "Jamiahs-MacBook-Air-2.local"
     assert mac_after_clear.is_demo is False
     session.close()
+
+
+def test_ensure_is_demo_columns_backfills_old_schema(db_engine):
+    """A database created before the demo seed has no is_demo columns.
+
+    create_all never alters existing tables, so the boot-time backfill
+    must add the flag or every list query fails. Simulate the old
+    schema by dropping the column, run the backfill, then seed.
+    """
+    from app.database import ensure_is_demo_columns
+
+    session = _db(db_engine)
+    session.execute(text("ALTER TABLE devices DROP COLUMN is_demo"))
+    session.execute(text("ALTER TABLE patches DROP COLUMN is_demo"))
+    session.commit()
+    session.close()
+
+    ensure_is_demo_columns(db_engine)
+    # Idempotent: a second run is a no-op, not an error.
+    ensure_is_demo_columns(db_engine)
+
+    insp = inspect(db_engine)
+    assert "is_demo" in {c["name"] for c in insp.get_columns("devices")}
+    assert "is_demo" in {c["name"] for c in insp.get_columns("patches")}
+
+    client = _client(db_engine)
+    headers, _ = _auth(db_engine)
+    seeded = client.post("/api/v1/demo/seed", headers=headers)
+    assert seeded.status_code == 200
+    assert seeded.json()["seeded"] is True
+    assert seeded.json()["counts"]["devices"] == 60
+    devices = client.get("/api/v1/devices/", headers=headers).json()
+    assert len(devices) == 60
+    assert all(d["is_demo"] is True for d in devices)

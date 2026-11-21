@@ -63,3 +63,30 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def ensure_is_demo_columns(engine_to_check=None):
+    """Add the is_demo flag to existing tables that predate it.
+
+    create_all only creates missing tables — it never alters an existing
+    one. The demo seed added is_demo to the platform models, so a database
+    created before that change has tables without the column, and every
+    list query would fail with "column ... is_demo does not exist".
+    This runs on boot (see app.main), is idempotent, and only touches
+    tables whose model declares is_demo.
+    """
+    from sqlalchemy import inspect, text
+
+    eng = engine_to_check or engine
+    insp = inspect(eng)
+    with eng.begin() as conn:
+        for table in Base.metadata.tables.values():
+            if "is_demo" not in table.c:
+                continue
+            existing = {c["name"] for c in insp.get_columns(table.name)}
+            if "is_demo" in existing:
+                continue
+            if eng.dialect.name == "postgresql":
+                conn.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN is_demo BOOLEAN DEFAULT FALSE'))
+            else:
+                conn.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN is_demo BOOLEAN DEFAULT 0'))

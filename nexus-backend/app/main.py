@@ -3,7 +3,7 @@ import time
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .database import engine, Base
+from .database import engine, Base, ensure_is_demo_columns
 
 log = logging.getLogger("nexus.main")
 
@@ -32,6 +32,10 @@ from .routers import (
 
 # Create tables
 Base.metadata.create_all(bind=engine)
+
+# Backfill the is_demo flag on databases created before the demo seed
+# added it (create_all never alters existing tables).
+ensure_is_demo_columns()
 
 app = FastAPI(
     title="NEXUS API",
