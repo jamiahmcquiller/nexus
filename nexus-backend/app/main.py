@@ -28,6 +28,16 @@ app.include_router(alerts.router)
 app.include_router(policies.router)
 app.include_router(compliance.router)
 
+@app.get("/")
+async def root():
+    return {
+        "service": "NEXUS API",
+        "status": "running",
+        "docs": "/docs",
+        "health": "/health",
+        "api": "/api/v1"
+    }
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "nexus-backend"}
