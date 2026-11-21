@@ -857,7 +857,28 @@ class ReportTemplate(Base):
     created_at = _created()
 
 
+# --------------------------------------------------------------- scheduler
+class SchedulerRun(Base):
+    """One pass of the background scheduler: what it did, per tenant.
+
+    A run is tenant-scoped to the tenant whose jobs it processed; a
+    worker pass that touches several tenants writes one row per tenant
+    (plus one row with tenant_id NULL is never written — the worker
+    always groups by tenant). ``summary`` is the same dict the API
+    returns from a run-once call.
+    """
+    __tablename__ = "scheduler_runs"
+    id = _id()
+    tenant_id = _tenant()
+    title = Column(String, default="scheduler run")
+    status = Column(String, default="complete")  # complete, partial, failed
+    summary = Column(JSON, default=dict)
+    attributes = _attrs()
+    created_at = _created()
+
+
 ALL_EXTENDED_MODELS = [
+    SchedulerRun,
     PatchDeployment, ThirdPartyApp, PatchTest,
     ZeroDayMitigation, SecurityConfiguration, WebServerHardening, HighRiskSoftware,
     EndpointTelemetry, ThreatHunt, IncidentResponse,

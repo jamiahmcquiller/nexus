@@ -80,9 +80,9 @@ One platform covering the full Endpoint Central-style feature set — see
 - [x] Backend skeleton with tenant-aware models
 - [x] Frontend console shell
 - [x] Platform models, APIs, and console for all 17 feature areas (v0.2.0)
+- [x] Background scheduler / worker for deployments, hunts, and remediation workflows (v0.3.0 — see `docs/scheduler.md`; run `python -m app.worker`, or `docker compose -f infra/docker-compose.yml up -d` for API + worker)
 - [ ] Go agent prototype (read-only inventory)
 - [ ] End-to-end enrollment flow
-- [ ] Background scheduler / worker for deployments, hunts, and remediation workflows
 - [ ] Vendor patch / CVE / threat-intel feed integrations
 - [ ] Endpoint enforcement in the agent (patch / AV / EDR / DLP)
 

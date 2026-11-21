@@ -212,6 +212,11 @@ const MODULES: ModuleDef[] = [
     ],
   },
   {
+    id: 'scheduler', label: 'Scheduler',
+    description: 'Background worker — patch deployments, threat hunts, remediation workflows, and expiry housekeeping. Runs as a separate process (python -m app.worker); this page shows its runs and lets an owner/admin trigger one tick now.',
+    endpoint: '/api/v1/scheduler/runs/',
+  },
+  {
     id: 'compliance', label: 'Compliance & Reporting',
     description: 'CIS, NIST, Cyber Essentials, HIPAA, GDPR, and PCI — audit-ready reports and Active Directory reporting.',
     endpoint: '/api/v1/compliance/',
@@ -314,6 +319,16 @@ function App() {
       load()
     } catch (err: any) {
       setNotice(err.response?.data?.detail || 'Create failed')
+    }
+  }
+
+  const runSchedulerNow = async () => {
+    try {
+      const res = await axios.post(`${API}/api/v1/scheduler/run-once`, {}, { headers })
+      setNotice(`Scheduler tick done: ${(res.data.actions || []).length} action(s).`)
+      load()
+    } catch (err: any) {
+      setNotice(err.response?.data?.detail || 'Scheduler run failed — owner/admin only, and the API must be running.')
     }
   }
 
@@ -445,6 +460,9 @@ function App() {
           <div className="flex gap-2 mt-4">
             <input className="flex-1 border p-2 rounded text-sm" placeholder="New record name / title" value={newName} onChange={e => setNewName(e.target.value)} />
             <button className="bg-blue-600 text-white px-4 rounded text-sm" onClick={createItem}>Add</button>
+            {module === 'scheduler' && (
+              <button className="bg-green-600 text-white px-4 rounded text-sm" onClick={runSchedulerNow}>Run now</button>
+            )}
           </div>
           {notice && <p className="text-sm text-gray-600 mt-2">{notice}</p>}
         </div>

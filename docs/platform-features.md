@@ -57,10 +57,15 @@ Every resource supports the same five calls:
 - `POST /api/v1/servers/patch-windows/{id}/approve`
 - `POST /api/v1/app-control/privilege-grants/{id}/revoke`
 
-## What this is not (yet)
+## Scheduler
 
-- No background scheduler: deployments, hunts, and remediation workflows
-  are records with a status today. A scheduler / worker is the next step.
+Deployments, hunts, and remediation workflows are executed by the
+background worker — see `docs/scheduler.md`. One step per record per
+tick, idempotent, with an AuditEvent per transition and a
+`SchedulerRun` row per tenant. Run it with `python -m app.worker`,
+or `docker compose -f infra/docker-compose.yml up -d`.
+
+## What this is not (yet)
 - No vendor feeds bundled: patch catalogues, CVE intelligence, and
   threat-intel feeds need a provider integration.
 - No endpoint enforcement: the Go agent reports inventory and heartbeat

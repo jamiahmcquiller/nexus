@@ -54,8 +54,8 @@ All modules below are designed as first-class capabilities on the same multi-ten
 - [x] Console navigation covering all major capabilities
 - [x] Platform models + API routers for all 17 feature areas (`nexus-backend/app/models_extended.py`, `nexus-backend/app/routers/_crud.py` + 18 domain routers) — 57 tenant-scoped tables, 57 CRUD resource endpoints, plus workflow actions: patch test / approve / decline / deploy, vulnerability mitigate / remediate, EDR contain, malware quarantine, ransomware single-click recovery, MDM lock / wipe, DLP container wipe, remote-session end, server patch-window approve, privilege-grant revoke
 - [x] Console wired to all platform APIs (`frontend/src/App.tsx`) — per-module sub-sections, stats, table view, add, status change, and workflow buttons
+- [x] Background scheduler / worker (v0.3.0, `app/scheduler.py` + `app/worker.py`) — patch deployments, threat hunts, remediation workflows, app/imaging deployments, server patch windows, and expiry housekeeping; one step per tick, idempotent; 7 pytest tests pass on in-memory SQLite (see `docs/scheduler.md`)
 - [ ] Agent telemetry ingestion (endpoint / server / DEX telemetry endpoints exist; the Go agent does not yet send them)
-- [ ] Full workflow automation and policy engines (deployment scheduling, patch approval chains, and DEX remediation workflows are records + status transitions today, not background schedulers yet)
 - [ ] Real patch / AV / EDR enforcement on endpoints — the platform is the console, API, and data model; enforcement depends on the agent and on vendor patch / threat-intel feeds, which are not bundled
 
 ## Verification (2026-11-21)

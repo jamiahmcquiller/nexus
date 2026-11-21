@@ -20,5 +20,39 @@ services:
     ports:
       - "6379:6379"
 
+  # API — FastAPI console + platform APIs.
+  backend:
+    build:
+      context: ../nexus-backend
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql+psycopg://nexus:nexus_dev@postgres:5432/nexus
+      SECRET_KEY: dev-secret-change-in-production-nexus-2026
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+  # Scheduler worker — runs patch deployments, threat hunts, remediation
+  # workflows, and expiry housekeeping. Run exactly one replica: two
+  # workers would both advance the same records (harmless by design,
+  # but it would double the AuditEvents). See docs/scheduler.md.
+  worker:
+    build:
+      context: ../nexus-backend
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql+psycopg://nexus:nexus_dev@postgres:5432/nexus
+      SCHEDULER_INTERVAL_SECONDS: "60"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    command: ["python", "-m", "app.worker"]
+    restart: unless-stopped
+
 volumes:
   postgres_data:

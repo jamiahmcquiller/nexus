@@ -7,7 +7,7 @@ from .routers import (
     auth, devices, patches, vulnerabilities, alerts, policies, compliance,
     patching, vulnops, edr, malware, browser, appcontrol, dlp, access,
     assets, distribution, dex, remote, imaging, configmgmt, mdm,
-    encryption, servers, reporting,
+    encryption, servers, reporting, scheduler,
 )
 
 # Create tables
@@ -16,7 +16,7 @@ Base.metadata.create_all(bind=engine)
 app = FastAPI(
     title="NEXUS API",
     description="Unified IT Operations & Security Management Platform",
-    version="0.2.0",
+    version="0.3.0",
 )
 
 app.add_middleware(
@@ -55,6 +55,7 @@ app.include_router(mdm.router)
 app.include_router(encryption.router)
 app.include_router(servers.router)
 app.include_router(reporting.router)
+app.include_router(scheduler.router)
 
 @app.get("/")
 async def root():
@@ -73,12 +74,12 @@ async def health():
 @app.get("/api/v1/status")
 async def status():
     return {
-        "version": "0.2.0",
-        "phase": "Platform — patch, vulnerability, EDR, malware, ransomware, browser, app control, DLP, secure access, assets, distribution, DEX, remote, imaging, config, MDM, encryption, servers, reporting",
+        "version": "0.3.0",
+        "phase": "Platform + scheduler — patch, vulnerability, EDR, malware, ransomware, browser, app control, DLP, secure access, assets, distribution, DEX, remote, imaging, config, MDM, encryption, servers, reporting, scheduler",
         "modules": [
             "patching", "vulnerabilities", "edr", "malware", "ransomware",
             "browser", "app-control", "dlp", "access", "assets",
             "distribution", "dex", "remote", "imaging", "config",
-            "mdm", "encryption", "servers", "reporting",
+            "mdm", "encryption", "servers", "reporting", "scheduler",
         ],
     }
