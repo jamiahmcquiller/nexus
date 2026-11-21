@@ -8,7 +8,7 @@ Multi-tenant B2B SaaS for endpoint inventory, vulnerability operations, patch ma
 
 ```
 nexus/
-├── backend/          # FastAPI application (console + APIs)
+├── nexus-backend/    # FastAPI application (console + APIs)
 ├── frontend/         # React + TypeScript admin console
 ├── agent/            # Go Windows endpoint agent (MVP: inventory + heartbeat)
 ├── docs/             # Product docs, ADRs, schemas
@@ -29,7 +29,7 @@ curl -sSL https://install.python-poetry.org | python3 -
 export PATH="$HOME/.local/bin:$PATH"
 
 # Backend
-cd backend
+cd nexus-backend
 poetry install
 poetry run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
@@ -46,7 +46,7 @@ Forward ports 8000 (backend) and 5173 (frontend) in the Ports panel if they are 
 ```bash
 # From repo root
 docker compose -f infra/docker-compose.yml up -d
-cd backend && poetry install && poetry run uvicorn app.main:app --reload
+cd nexus-backend && poetry install && poetry run uvicorn app.main:app --reload
 cd frontend && npm install && npm run dev
 ```
 
