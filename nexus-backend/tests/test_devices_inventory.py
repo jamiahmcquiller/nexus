@@ -1,5 +1,12 @@
 """Device inventory endpoints — enroll + inventory upload + latest snapshot.
 
+Device auth (backend v0.7.0): enrollment tokens are one-time stored
+tokens issued by an owner/admin. Enrolling spends the token and issues
+the device its own long-lived credential, returned once. Heartbeat,
+inventory upload and command polling authenticate with that device
+credential in the X-Device-Token header — an enrollment token never
+authenticates those calls.
+
 Run:  cd nexus-backend && python -m pytest tests/test_devices_inventory.py
 """
 import os
@@ -69,23 +76,32 @@ def _auth(db_engine, role="owner"):
     return {"Authorization": f"Bearer {token}"}, user
 
 
-def _enroll(client, tenant_id, device_id="dev-1"):
+def _issue_token(client, headers):
+    r = client.post("/api/v1/devices/enrollment-tokens", headers=headers,
+                    json={"label": "test"})
+    assert r.status_code == 201, r.text
+    return r.json()["token"]
+
+
+def _enroll(client, headers, device_id="dev-1"):
+    token = _issue_token(client, headers)
     r = client.post("/api/v1/devices/enroll", json={
-        "enrollment_token": f"nexus-{tenant_id}-abcd1234",
-        "hostname": "TEST-PC", "device_id": device_id, "agent_version": "0.2.0",
+        "enrollment_token": token,
+        "hostname": "TEST-PC", "device_id": device_id, "agent_version": "0.3.1",
         "attributes": {"os": "Windows 11"},
     })
     assert r.status_code == 200, r.text
-    return r.json()
+    body = r.json()
+    body["enrollment_token"] = token
+    return body
 
 
 def test_enroll_then_inventory_then_latest(db_engine):
     client = _client(db_engine)
     headers, user = _auth(db_engine)
-    token = f"nexus-{user['tenant_id']}-abcd1234"
-    _enroll(client, user["tenant_id"])
-    r = client.post("/api/v1/devices/dev-1/inventory", json={
-        "enrollment_token": token,
+    enrolled = _enroll(client, headers)
+    device_headers = {"X-Device-Token": enrolled["device_token"]}
+    r = client.post("/api/v1/devices/dev-1/inventory", headers=device_headers, json={
         "hardware": {"cpu": {"count": 8}, "network": [{"name": "Ethernet", "mac": "AA:BB:CC:DD:EE:FF"}]},
         "os": {"platform": "windows", "name": "Windows 11"},
         "software": [{"name": "Chrome", "version": "120"}],
@@ -100,31 +116,51 @@ def test_enroll_then_inventory_then_latest(db_engine):
     assert body["hardware"]["network"][0]["mac"] == "AA:BB:CC:DD:EE:FF"
 
 
-def test_inventory_wrong_tenant_token_is_forbidden(db_engine):
+def test_inventory_without_device_token_is_401(db_engine):
     client = _client(db_engine)
-    _, user = _auth(db_engine)
-    _enroll(client, user["tenant_id"])
+    headers, _ = _auth(db_engine)
+    _enroll(client, headers)
     r = client.post("/api/v1/devices/dev-1/inventory", json={
-        "enrollment_token": f"nexus-{uuid.uuid4()}-abcd1234",
         "hardware": {}, "os": {}, "software": [],
     })
+    assert r.status_code == 401
+
+
+def test_inventory_enrollment_token_does_not_authenticate(db_engine):
+    client = _client(db_engine)
+    headers, _ = _auth(db_engine)
+    enrolled = _enroll(client, headers)
+    r = client.post("/api/v1/devices/dev-1/inventory",
+                    headers={"X-Device-Token": enrolled["enrollment_token"]},
+                    json={"hardware": {}, "os": {}, "software": []})
+    assert r.status_code == 401
+
+
+def test_inventory_wrong_device_token_is_403(db_engine):
+    client = _client(db_engine)
+    headers, _ = _auth(db_engine)
+    _enroll(client, headers, device_id="dev-1")
+    other = _enroll(client, headers, device_id="dev-2")
+    r = client.post("/api/v1/devices/dev-1/inventory",
+                    headers={"X-Device-Token": other["device_token"]},
+                    json={"hardware": {}, "os": {}, "software": []})
     assert r.status_code == 403
 
 
-def test_inventory_unknown_device_is_404(db_engine):
+def test_inventory_unknown_device_path_is_403(db_engine):
     client = _client(db_engine)
-    _, user = _auth(db_engine)
-    r = client.post("/api/v1/devices/nope/inventory", json={
-        "enrollment_token": f"nexus-{user['tenant_id']}-abcd1234",
-        "hardware": {}, "os": {}, "software": [],
-    })
-    assert r.status_code == 404
+    headers, _ = _auth(db_engine)
+    enrolled = _enroll(client, headers)
+    r = client.post("/api/v1/devices/nope/inventory",
+                    headers={"X-Device-Token": enrolled["device_token"]},
+                    json={"hardware": {}, "os": {}, "software": []})
+    assert r.status_code == 403
 
 
 def test_latest_without_snapshot_is_404(db_engine):
     client = _client(db_engine)
     headers, user = _auth(db_engine)
-    _enroll(client, user["tenant_id"])
+    _enroll(client, headers)
     r = client.get("/api/v1/devices/dev-1/inventory/latest", headers=headers)
     assert r.status_code == 404
 
@@ -132,10 +168,10 @@ def test_latest_without_snapshot_is_404(db_engine):
 def test_latest_cross_tenant_is_404(db_engine):
     client = _client(db_engine)
     headers_a, user_a = _auth(db_engine)
-    _enroll(client, user_a["tenant_id"])
-    token = f"nexus-{user_a['tenant_id']}-abcd1234"
-    client.post("/api/v1/devices/dev-1/inventory", json={
-        "enrollment_token": token, "hardware": {}, "os": {}, "software": []})
+    enrolled = _enroll(client, headers_a)
+    client.post("/api/v1/devices/dev-1/inventory",
+                headers={"X-Device-Token": enrolled["device_token"]},
+                json={"hardware": {}, "os": {}, "software": []})
     headers_b, _ = _auth(db_engine, role="owner")
     r = client.get("/api/v1/devices/dev-1/inventory/latest", headers=headers_b)
     assert r.status_code == 404

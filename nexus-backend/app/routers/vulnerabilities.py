@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models import Vulnerability, User
 from ..auth import get_current_user
-from ._crud import _serialize
+from ._crud import _serialize, write_routes
 
 router = APIRouter(prefix="/api/v1/vulnerabilities", tags=["vulnerabilities"])
 
@@ -23,3 +23,9 @@ def vuln_stats(db: Session = Depends(get_db), current_user: User = Depends(get_c
         "remediated": q.filter(Vulnerability.status == "remediated").count(),
         "critical": q.filter(Vulnerability.severity == "critical").count(),
     }
+
+# Write side (create / get / update / delete / status). Previously this
+# router was GET-only, so the console's Add button hit a 405 and its
+# status dropdown hit a 404.
+write_routes(router, Vulnerability, audit_prefix="vulnerability",
+             defaults={"title": "Untitled vulnerability", "status": "open"})

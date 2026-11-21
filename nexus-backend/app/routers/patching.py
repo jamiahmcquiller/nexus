@@ -11,7 +11,7 @@ from ..auth import get_current_user
 from ..database import get_db
 from ..models import Patch, User
 from ..models_extended import PatchDeployment, PatchTest, ThirdPartyApp
-from ._crud import _get_or_404, _serialize, crud_router
+from ._crud import _get_or_404, _serialize, crud_router, WRITE, DELETE
 
 router = APIRouter()
 router.include_router(crud_router("/api/v1/patch-deployments", PatchDeployment, "patching"))
@@ -20,7 +20,7 @@ router.include_router(crud_router("/api/v1/patch-tests", PatchTest, "patching"))
 
 
 @router.post("/api/v1/patches/{patch_id}/test")
-def test_patch(patch_id: str, payload: dict, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def test_patch(patch_id: str, payload: dict, db: Session = Depends(get_db), current_user: User = Depends(WRITE)):
     patch = _get_or_404(db, Patch, patch_id, current_user)
     patch.status = "testing"
     test = PatchTest(tenant_id=current_user.tenant_id, patch_id=patch.id,
@@ -32,7 +32,7 @@ def test_patch(patch_id: str, payload: dict, db: Session = Depends(get_db), curr
 
 
 @router.post("/api/v1/patches/{patch_id}/approve")
-def approve_patch(patch_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def approve_patch(patch_id: str, db: Session = Depends(get_db), current_user: User = Depends(WRITE)):
     patch = _get_or_404(db, Patch, patch_id, current_user)
     patch.status = "approved"
     db.commit()
@@ -40,7 +40,7 @@ def approve_patch(patch_id: str, db: Session = Depends(get_db), current_user: Us
 
 
 @router.post("/api/v1/patches/{patch_id}/decline")
-def decline_patch(patch_id: str, payload: dict, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def decline_patch(patch_id: str, payload: dict, db: Session = Depends(get_db), current_user: User = Depends(WRITE)):
     patch = _get_or_404(db, Patch, patch_id, current_user)
     patch.status = "declined"
     attrs = dict(patch.attributes or {})
@@ -52,7 +52,7 @@ def decline_patch(patch_id: str, payload: dict, db: Session = Depends(get_db), c
 
 
 @router.post("/api/v1/patches/{patch_id}/deploy")
-def deploy_patch(patch_id: str, payload: dict, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def deploy_patch(patch_id: str, payload: dict, db: Session = Depends(get_db), current_user: User = Depends(DELETE)):
     patch = _get_or_404(db, Patch, patch_id, current_user)
     patch.status = "deployed"
     deployment = PatchDeployment(

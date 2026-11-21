@@ -6,13 +6,28 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Secrets live in infra/.env (gitignored via the `.env` rule), never in
+# the repo. Generate random values on first run so a fresh checkout
+# works out of the box. If the stack already has a postgres_data
+# volume, it was initialized with an earlier password — put THAT
+# password in infra/.env (see infra/.env.example) or Postgres refuses
+# to start; see docs/security.md.
+if [ ! -f infra/.env ]; then
+  mkdir -p infra
+  POSTGRES_PASSWORD="$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)"
+  SECRET_KEY="$(head -c 48 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 43)"
+  printf 'POSTGRES_PASSWORD=%s\nSECRET_KEY=%s\n' "$POSTGRES_PASSWORD" "$SECRET_KEY" > infra/.env
+  chmod 600 infra/.env
+  echo "Generated infra/.env with random secrets (gitignored)."
+fi
+
 if [ "${1:-}" = "--docker" ]; then
-  docker compose -f infra/docker-compose.yml up -d --build
+  docker compose --env-file infra/.env -f infra/docker-compose.yml up -d --build
 else
-  docker compose -f infra/docker-compose.yml up -d postgres redis
+  docker compose --env-file infra/.env -f infra/docker-compose.yml up -d postgres redis
   echo "Waiting for Postgres…"
   for _ in $(seq 1 30); do
-    docker compose -f infra/docker-compose.yml exec -T postgres pg_isready -U nexus >/dev/null 2>&1 && break
+    docker compose --env-file infra/.env -f infra/docker-compose.yml exec -T postgres pg_isready -U nexus >/dev/null 2>&1 && break
     sleep 2
   done
   export PATH="$HOME/.local/bin:$PATH"
@@ -31,7 +46,7 @@ for _ in $(seq 1 30); do
   sleep 2
 done
 echo "API did not come up in 60s. Check:"
-echo "  docker compose -f infra/docker-compose.yml ps"
-echo "  docker compose -f infra/docker-compose.yml logs backend"
+echo "  docker compose --env-file infra/.env -f infra/docker-compose.yml ps"
+echo "  docker compose --env-file infra/.env -f infra/docker-compose.yml logs backend"
 echo "  /tmp/nexus-backend.log"
 exit 1

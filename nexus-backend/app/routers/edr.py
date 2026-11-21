@@ -13,7 +13,7 @@ from ..auth import get_current_user
 from ..database import get_db
 from ..models import SecurityAlert, User
 from ..models_extended import EndpointTelemetry, IncidentResponse, ThreatHunt
-from ._crud import _get_or_404, _serialize, crud_router
+from ._crud import _get_or_404, _serialize, crud_router, WRITE
 
 router = APIRouter()
 router.include_router(crud_router("/api/v1/edr/telemetry", EndpointTelemetry, "edr"))
@@ -22,7 +22,7 @@ router.include_router(crud_router("/api/v1/edr/incidents", IncidentResponse, "ed
 
 
 @router.post("/api/v1/edr/incidents/{incident_id}/contain")
-def contain_incident(incident_id: str, payload: dict, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def contain_incident(incident_id: str, payload: dict, db: Session = Depends(get_db), current_user: User = Depends(WRITE)):
     incident = _get_or_404(db, IncidentResponse, incident_id, current_user)
     incident.action = payload.get("action", "isolate")  # isolate | kill-process | quarantine | rollback
     incident.status = "in-progress"
@@ -39,7 +39,7 @@ def contain_incident(incident_id: str, payload: dict, db: Session = Depends(get_
 
 
 @router.post("/api/v1/edr/hunts/{hunt_id}/run")
-def run_hunt(hunt_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def run_hunt(hunt_id: str, db: Session = Depends(get_db), current_user: User = Depends(WRITE)):
     hunt = _get_or_404(db, ThreatHunt, hunt_id, current_user)
     hunt.status = "running"
     db.commit()

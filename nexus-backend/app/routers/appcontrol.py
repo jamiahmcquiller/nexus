@@ -13,7 +13,7 @@ from ..auth import get_current_user
 from ..database import get_db
 from ..models import User
 from ..models_extended import AppControlRule, PrivilegeGrant
-from ._crud import _get_or_404, _serialize, crud_router
+from ._crud import _get_or_404, _serialize, crud_router, DELETE
 
 router = APIRouter()
 router.include_router(crud_router("/api/v1/app-control/rules", AppControlRule, "app-control"))
@@ -21,7 +21,7 @@ router.include_router(crud_router("/api/v1/app-control/privilege-grants", Privil
 
 
 @router.post("/api/v1/app-control/privilege-grants/{grant_id}/revoke")
-def revoke_grant(grant_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def revoke_grant(grant_id: str, db: Session = Depends(get_db), current_user: User = Depends(DELETE)):
     grant = _get_or_404(db, PrivilegeGrant, grant_id, current_user)
     grant.status = "revoked"
     db.commit()

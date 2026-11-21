@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models import Patch, User
 from ..auth import get_current_user
-from ._crud import _serialize
+from ._crud import _serialize, write_routes
 
 router = APIRouter(prefix="/api/v1/patches", tags=["patches"])
 
@@ -24,3 +24,9 @@ def patch_stats(db: Session = Depends(get_db), current_user: User = Depends(get_
         "declined": q.filter(Patch.status == "declined").count(),
         "deployed": q.filter(Patch.status == "deployed").count(),
     }
+
+# Write side (create / get / update / delete / status). Previously this
+# router was GET-only, so the console's Add button hit a 405 and its
+# status dropdown hit a 404.
+write_routes(router, Patch, audit_prefix="patch",
+             defaults={"title": "Untitled patch", "status": "available"})

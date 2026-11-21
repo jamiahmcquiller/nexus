@@ -3,7 +3,15 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: nexus
-      POSTGRES_PASSWORD: nexus_dev
+      # Fail fast when the secret is missing — never silently fall back
+      # to a hardcoded password. Values come from infra/.env (see
+      # infra/.env.example; scripts/start-nexus.sh generates it).
+      # MIGRATION: if this stack already has a postgres_data volume, the
+      # database was initialized with whatever password was in effect
+      # then (previously the hardcoded dev value). Put THAT password in
+      # infra/.env or Postgres will refuse to start; rotate it
+      # separately, never by editing this file.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in infra/.env (see infra/.env.example)}
       POSTGRES_DB: nexus
     ports:
       - "5432:5432"
@@ -26,8 +34,8 @@ services:
       context: ../nexus-backend
       dockerfile: Dockerfile
     environment:
-      DATABASE_URL: postgresql+psycopg://nexus:nexus_dev@postgres:5432/nexus
-      SECRET_KEY: dev-secret-change-in-production-nexus-2026
+      DATABASE_URL: postgresql+psycopg://nexus:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in infra/.env}@postgres:5432/nexus
+      SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in infra/.env (see infra/.env.example)}
     ports:
       - "8000:8000"
     depends_on:
@@ -59,7 +67,8 @@ services:
       context: ../nexus-backend
       dockerfile: Dockerfile
     environment:
-      DATABASE_URL: postgresql+psycopg://nexus:nexus_dev@postgres:5432/nexus
+      DATABASE_URL: postgresql+psycopg://nexus:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in infra/.env}@postgres:5432/nexus
+      SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in infra/.env (see infra/.env.example)}
       SCHEDULER_INTERVAL_SECONDS: "60"
     depends_on:
       postgres:

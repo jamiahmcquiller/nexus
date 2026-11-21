@@ -661,6 +661,29 @@ class AgentCommand(Base):
     completed_at = Column(DateTime)
 
 
+# ------------------------------------------------------- device enrollment
+class EnrollmentToken(Base):
+    """One-time enrollment token for the endpoint agent.
+
+    Only the SHA-256 hash is stored; the plaintext token is shown once
+    when issued and never stored or logged. A token enrolls exactly one
+    device in one tenant, until it expires or is used. Enrolling spends
+    the token and issues the device its own long-lived credential
+    (Device.device_token_hash) — the enrollment token alone can never
+    authenticate a heartbeat, an inventory upload, or a command poll.
+    """
+    __tablename__ = "enrollment_tokens"
+    id = _id()
+    tenant_id = _tenant()
+    token_hash = Column(String, nullable=False, unique=True)
+    label = Column(String)
+    expires_at = Column(DateTime)
+    used_at = Column(DateTime)
+    used_device_id = Column(UUID(as_uuid=True), ForeignKey("devices.id"), nullable=True)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    created_at = _created()
+
+
 # ------------------------------------------------------------- imaging
 class OsImage(Base):
     __tablename__ = "os_images"

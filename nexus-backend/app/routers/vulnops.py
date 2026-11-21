@@ -12,7 +12,7 @@ from ..auth import get_current_user
 from ..database import get_db
 from ..models import User, Vulnerability
 from ..models_extended import HighRiskSoftware, SecurityConfiguration, WebServerHardening, ZeroDayMitigation
-from ._crud import _get_or_404, _serialize, crud_router
+from ._crud import _get_or_404, _serialize, crud_router, WRITE
 
 router = APIRouter()
 router.include_router(crud_router("/api/v1/zero-day-mitigations", ZeroDayMitigation, "vulnerabilities"))
@@ -22,7 +22,7 @@ router.include_router(crud_router("/api/v1/high-risk-software", HighRiskSoftware
 
 
 @router.post("/api/v1/vulnerabilities/{vuln_id}/mitigate")
-def mitigate_vulnerability(vuln_id: str, payload: dict, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def mitigate_vulnerability(vuln_id: str, payload: dict, db: Session = Depends(get_db), current_user: User = Depends(WRITE)):
     vuln = _get_or_404(db, Vulnerability, vuln_id, current_user)
     vuln.status = "mitigated"
     mitigation = ZeroDayMitigation(
@@ -35,7 +35,7 @@ def mitigate_vulnerability(vuln_id: str, payload: dict, db: Session = Depends(ge
 
 
 @router.post("/api/v1/vulnerabilities/{vuln_id}/remediate")
-def remediate_vulnerability(vuln_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def remediate_vulnerability(vuln_id: str, db: Session = Depends(get_db), current_user: User = Depends(WRITE)):
     vuln = _get_or_404(db, Vulnerability, vuln_id, current_user)
     vuln.status = "remediated"
     db.commit()

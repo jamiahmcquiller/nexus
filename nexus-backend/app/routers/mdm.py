@@ -13,7 +13,7 @@ from ..auth import get_current_user
 from ..database import get_db
 from ..models import User
 from ..models_extended import MobileApp, MobileDevice, MobileProfile
-from ._crud import _get_or_404, _serialize, crud_router
+from ._crud import _get_or_404, _serialize, crud_router, DELETE
 
 router = APIRouter()
 router.include_router(crud_router("/api/v1/mdm/devices", MobileDevice, "mdm"))
@@ -22,7 +22,7 @@ router.include_router(crud_router("/api/v1/mdm/apps", MobileApp, "mdm"))
 
 
 @router.post("/api/v1/mdm/devices/{device_id}/wipe")
-def wipe_mobile_device(device_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def wipe_mobile_device(device_id: str, db: Session = Depends(get_db), current_user: User = Depends(DELETE)):
     device = _get_or_404(db, MobileDevice, device_id, current_user)
     device.status = "wiped"
     device.enrollment_status = "wiped"
@@ -31,7 +31,7 @@ def wipe_mobile_device(device_id: str, db: Session = Depends(get_db), current_us
 
 
 @router.post("/api/v1/mdm/devices/{device_id}/lock")
-def lock_mobile_device(device_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def lock_mobile_device(device_id: str, db: Session = Depends(get_db), current_user: User = Depends(DELETE)):
     device = _get_or_404(db, MobileDevice, device_id, current_user)
     device.status = "locked"
     db.commit()

@@ -1,5 +1,9 @@
 """Agent command queue: remote execution + Wake-on-LAN.
 
+Device auth (backend v0.7.0): the agent polls and completes commands
+with its per-device credential (X-Device-Token), issued once at
+enrollment. Enrollment tokens never authenticate these calls.
+
 Run:  cd nexus-backend && python -m pytest tests/test_agent_commands.py
 """
 import os
@@ -72,20 +76,31 @@ def _auth(db_engine, role="owner"):
     return {"Authorization": f"Bearer {token}"}, user
 
 
-def _enroll(client, tenant_id, device_id="dev-1"):
+def _issue_token(client, headers):
+    r = client.post("/api/v1/devices/enrollment-tokens", headers=headers,
+                    json={"label": "test"})
+    assert r.status_code == 201, r.text
+    return r.json()["token"]
+
+
+def _enroll(client, headers, device_id="dev-1"):
+    token = _issue_token(client, headers)
     r = client.post("/api/v1/devices/enroll", json={
-        "enrollment_token": f"nexus-{tenant_id}-abcd1234",
-        "hostname": "TEST-PC", "device_id": device_id, "agent_version": "0.2.0",
+        "enrollment_token": token,
+        "hostname": "TEST-PC", "device_id": device_id, "agent_version": "0.3.1",
         "attributes": {},
     })
     assert r.status_code == 200, r.text
+    body = r.json()
+    body["enrollment_token"] = token
+    return body
 
 
 def test_command_round_trip(db_engine):
     client = _client(db_engine)
     headers, user = _auth(db_engine)
-    _enroll(client, user["tenant_id"])
-    token = f"nexus-{user['tenant_id']}-abcd1234"
+    enrolled = _enroll(client, headers)
+    device_headers = {"X-Device-Token": enrolled["device_token"]}
     # create (owner) -> audit event written
     r = client.post("/api/v1/agent/commands", headers=headers, json={
         "device_id": None, "kind": "shell", "command": "echo hello-nexus"})
@@ -94,23 +109,23 @@ def test_command_round_trip(db_engine):
     assert cmd["status"] == "pending"
     # agent polls and claims it
     r = client.get("/api/v1/agent/commands/next",
-                   params={"device_id": "dev-1", "enrollment_token": token})
+                   params={"device_id": "dev-1"}, headers=device_headers)
     assert r.status_code == 200, r.text
     assert r.json()["id"] == cmd["id"]
     # nothing else pending
     r = client.get("/api/v1/agent/commands/next",
-                   params={"device_id": "dev-1", "enrollment_token": token})
+                   params={"device_id": "dev-1"}, headers=device_headers)
     assert r.status_code == 204
     # agent reports the result
     r = client.post(f"/api/v1/agent/commands/{cmd['id']}/complete",
-                    params={"enrollment_token": token},
+                    headers=device_headers,
                     json={"exit_code": 0, "result": "hello-nexus\n"})
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "succeeded"
     assert r.json()["result"] == "hello-nexus\n"
     # completing again is idempotent
     r = client.post(f"/api/v1/agent/commands/{cmd['id']}/complete",
-                    params={"enrollment_token": token},
+                    headers=device_headers,
                     json={"exit_code": 1, "result": "different"})
     assert r.status_code == 200
     assert r.json()["status"] == "succeeded"
@@ -132,25 +147,35 @@ def test_wol_command_requires_mac(db_engine):
     assert r.status_code == 400
 
 
-def test_next_with_wrong_tenant_token_finds_nothing(db_engine):
+def test_next_with_wrong_device_token_is_403(db_engine):
     client = _client(db_engine)
     headers, user = _auth(db_engine)
-    _enroll(client, user["tenant_id"])
+    _enroll(client, headers, device_id="dev-1")
+    other = _enroll(client, headers, device_id="dev-2")
     client.post("/api/v1/agent/commands", headers=headers, json={
         "kind": "shell", "command": "echo hi"})
     r = client.get("/api/v1/agent/commands/next",
-                   params={"device_id": "dev-1",
-                           "enrollment_token": f"nexus-{uuid.uuid4()}-abcd1234"})
-    assert r.status_code == 404
+                   params={"device_id": "dev-1"},
+                   headers={"X-Device-Token": other["device_token"]})
+    assert r.status_code == 403
+
+
+def test_next_without_device_token_is_401(db_engine):
+    client = _client(db_engine)
+    headers, user = _auth(db_engine)
+    _enroll(client, headers)
+    client.post("/api/v1/agent/commands", headers=headers, json={
+        "kind": "shell", "command": "echo hi"})
+    r = client.get("/api/v1/agent/commands/next", params={"device_id": "dev-1"})
+    assert r.status_code == 401
 
 
 def test_wake_queues_wol_from_inventory_mac(db_engine):
     client = _client(db_engine)
     headers, user = _auth(db_engine)
-    _enroll(client, user["tenant_id"])
-    token = f"nexus-{user['tenant_id']}-abcd1234"
-    client.post("/api/v1/devices/dev-1/inventory", json={
-        "enrollment_token": token,
+    enrolled = _enroll(client, headers)
+    device_headers = {"X-Device-Token": enrolled["device_token"]}
+    client.post("/api/v1/devices/dev-1/inventory", headers=device_headers, json={
         "hardware": {"network": [{"name": "Ethernet", "mac": "AA:BB:CC:DD:EE:FF"}]},
         "os": {}, "software": []})
     # the target device's own id is needed: fetch it from the device list
@@ -167,7 +192,7 @@ def test_wake_queues_wol_from_inventory_mac(db_engine):
 def test_wake_without_mac_is_conflict(db_engine):
     client = _client(db_engine)
     headers, user = _auth(db_engine)
-    _enroll(client, user["tenant_id"])
+    _enroll(client, headers)
     devices = client.get("/api/v1/devices/", headers=headers).json()
     r = client.post(f"/api/v1/agent/devices/{devices[0]['id']}/wake",
                     headers=headers, json={})

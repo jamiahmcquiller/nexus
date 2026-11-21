@@ -1,12 +1,15 @@
-// NEXUS Endpoint Agent v0.3.0
+// NEXUS Endpoint Agent v0.3.1
 //
-// Endpoint agent: enrolls with the NEXUS backend, collects hardware /
-// OS / software inventory, sends a periodic heartbeat, executes remote
-// commands queued by an owner/admin, and sends Wake-on-LAN magic
-// packets on its own LAN when asked. It never uploads file contents,
-// and never reads browsing history, keystrokes, or personal files.
-// Remote execution is owner/admin-authorized, audit-logged, time-boxed
-// to 5 minutes, and can be disabled with -no-remote-exec.
+// Endpoint agent: enrolls with the NEXUS backend using a one-time
+// enrollment token, receives its own per-device credential, and then
+// authenticates heartbeat, inventory and command polling with that
+// credential (X-Device-Token). It collects hardware / OS / software
+// inventory, sends a periodic heartbeat, executes remote commands
+// queued by an owner/admin, and sends Wake-on-LAN magic packets on
+// its own LAN when asked. It never uploads file contents, and never
+// reads browsing history, keystrokes, or personal files. Remote
+// execution is owner/admin-authorized, audit-logged, time-boxed to 5
+// minutes, and can be disabled with -no-remote-exec.
 //
 // Usage (Windows PowerShell):
 //
@@ -49,7 +52,7 @@ import (
 	"time"
 )
 
-const version = "0.3.0"
+const version = "0.3.1"
 
 const defaultServer = "http://localhost:8000"
 
@@ -59,6 +62,7 @@ type agentConfig struct {
 	Server          string `json:"server"`
 	Token           string `json:"token"`
 	DeviceID        string `json:"device_id"`
+	DeviceToken     string `json:"device_token,omitempty"` // issued at enrollment; sent as X-Device-Token. Never logged in full.
 	AllowRemoteExec *bool  `json:"allow_remote_exec,omitempty"` // nil = allowed (default)
 }
 
@@ -456,9 +460,10 @@ func collectInventory() inventory {
 // -------------------------------------------------------------- backend
 
 type client struct {
-	server string
-	token  string
-	http   *http.Client
+	server      string
+	token       string // one-time enrollment token (enroll only)
+	deviceToken string // per-device credential (everything after enroll)
+	http        *http.Client
 }
 
 func (c *client) post(path string, payload any) (int, []byte, error) {
@@ -480,7 +485,32 @@ func (c *client) post(path string, payload any) (int, []byte, error) {
 	return resp.StatusCode, body, nil
 }
 
-func (c *client) enroll(hostname, deviceID string, inv inventory) error {
+// postDevice is post() authenticated as this device: heartbeat,
+// inventory upload and command completion send the per-device
+// credential in the X-Device-Token header. Enrollment uses post() —
+// the enrollment token is spent there and can never authenticate
+// these calls.
+func (c *client) postDevice(path string, payload any) (int, []byte, error) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return 0, nil, err
+	}
+	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(c.server, "/")+path, bytes.NewReader(data))
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Device-Token", c.deviceToken)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, body, nil
+}
+
+func (c *client) enroll(hostname, deviceID string, inv inventory) (string, error) {
 	payload := map[string]any{
 		"enrollment_token": c.token,
 		"hostname":         hostname,
@@ -497,23 +527,34 @@ func (c *client) enroll(hostname, deviceID string, inv inventory) error {
 	}
 	status, body, err := c.post("/api/v1/devices/enroll", payload)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if status >= 400 {
-		return fmt.Errorf("enroll failed (HTTP %d): %s", status, strings.TrimSpace(string(body)))
+		return "", fmt.Errorf("enroll failed (HTTP %d): %s", status, strings.TrimSpace(string(body)))
 	}
-	return nil
+	// Enrollment spends the one-time token and returns this device's
+	// own credential. It is saved to the config file (0600) and used
+	// for every call after this one.
+	var resp struct {
+		DeviceToken string `json:"device_token"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return "", fmt.Errorf("enroll response unreadable: %v", err)
+	}
+	if resp.DeviceToken == "" {
+		return "", fmt.Errorf("enroll succeeded but the backend issued no device credential")
+	}
+	return resp.DeviceToken, nil
 }
 
 func (c *client) uploadInventory(deviceID string, inv inventory) error {
 	payload := map[string]any{
-		"enrollment_token": c.token,
-		"hardware":         inv.Hardware,
-		"os":               inv.OS,
-		"software":         inv.Software,
-		"collected_at":     time.Now().UTC().Format(time.RFC3339),
+		"hardware":     inv.Hardware,
+		"os":           inv.OS,
+		"software":     inv.Software,
+		"collected_at": time.Now().UTC().Format(time.RFC3339),
 	}
-	status, body, err := c.post("/api/v1/devices/"+deviceID+"/inventory", payload)
+	status, body, err := c.postDevice("/api/v1/devices/"+deviceID+"/inventory", payload)
 	if err != nil {
 		return err
 	}
@@ -523,8 +564,8 @@ func (c *client) uploadInventory(deviceID string, inv inventory) error {
 	return nil
 }
 
-func (c *client) heartbeat(deviceID string) error {
-	status, body, err := c.post("/api/v1/devices/heartbeat?device_id="+deviceID, map[string]any{})
+func (c *client) heartbeat() error {
+	status, body, err := c.postDevice("/api/v1/devices/heartbeat", map[string]any{})
 	if err != nil {
 		return err
 	}
@@ -540,11 +581,11 @@ func (c *client) heartbeat(deviceID string) error {
 func (c *client) nextCommand(deviceID string) (*agentCommand, error) {
 	q := url.Values{}
 	q.Set("device_id", deviceID)
-	q.Set("enrollment_token", c.token)
 	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(c.server, "/")+"/api/v1/agent/commands/next?"+q.Encode(), nil)
 	if err != nil {
 		return nil, err
 	}
+	req.Header.Set("X-Device-Token", c.deviceToken)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, err
@@ -565,7 +606,7 @@ func (c *client) nextCommand(deviceID string) (*agentCommand, error) {
 }
 
 func (c *client) completeCommand(commandID string, exitCode int, result string) error {
-	status, body, err := c.post("/api/v1/agent/commands/"+commandID+"/complete?enrollment_token="+url.QueryEscape(c.token),
+	status, body, err := c.postDevice("/api/v1/agent/commands/"+commandID+"/complete",
 		map[string]any{"exit_code": exitCode, "result": result})
 	if err != nil {
 		return err
@@ -752,7 +793,7 @@ func main() {
 	if *tokenFlag != "" {
 		cfg.Token = *tokenFlag
 	}
-	if cfg.Token == "" || !strings.HasPrefix(cfg.Token, "nexus-") {
+	if cfg.DeviceToken == "" && (cfg.Token == "" || !strings.HasPrefix(cfg.Token, "nexus-")) {
 		log.Fatalf("an enrollment token is required: run with -token nexus-<tenant_uuid>-<random> (get one from the NEXUS console or generate_token.py)")
 	}
 	if cfg.DeviceID == "" {
@@ -767,7 +808,7 @@ func main() {
 	}
 
 	hostname, _ := os.Hostname()
-	cli := &client{server: cfg.Server, token: cfg.Token, http: &http.Client{Timeout: 30 * time.Second}}
+	cli := &client{server: cfg.Server, token: cfg.Token, deviceToken: cfg.DeviceToken, http: &http.Client{Timeout: 30 * time.Second}}
 	log.Printf("NEXUS Endpoint Agent v%s — device %s, server %s (token %s), remote execution %v", version, cfg.DeviceID, cfg.Server, redactToken(cfg.Token), cfg.remoteExecAllowed())
 
 	runCycle := func(uploadInv bool) {
@@ -775,11 +816,24 @@ func main() {
 		if len(inv.Errors) > 0 {
 			log.Printf("inventory collection warnings: %s", strings.Join(inv.Errors, "; "))
 		}
-		if err := cli.enroll(hostname, cfg.DeviceID, inv); err != nil {
-			log.Printf("enroll failed: %v", err)
-			return
+		if cfg.DeviceToken == "" {
+			// First run only: enroll with the one-time token. The
+			// token is spent by this call; the backend returns this
+			// device's own credential, which authenticates every
+			// call after this one. Later runs skip enrollment and
+			// use the stored credential.
+			deviceToken, err := cli.enroll(hostname, cfg.DeviceID, inv)
+			if err != nil {
+				log.Printf("enroll failed: %v", err)
+				return
+			}
+			cfg.DeviceToken = deviceToken
+			cli.deviceToken = deviceToken
+			if err := saveConfig(cfgPath, cfg); err != nil {
+				log.Printf("warning: could not save device credential to %s: %v", cfgPath, err)
+			}
+			log.Printf("enrolled as %s (%d software items found)", hostname, len(inv.Software))
 		}
-		log.Printf("enrolled as %s (%d software items found)", hostname, len(inv.Software))
 		if uploadInv {
 			if err := cli.uploadInventory(cfg.DeviceID, inv); err != nil {
 				log.Printf("inventory upload failed: %v", err)
@@ -787,7 +841,7 @@ func main() {
 				log.Printf("inventory uploaded (%d software items)", len(inv.Software))
 			}
 		}
-		if err := cli.heartbeat(cfg.DeviceID); err != nil {
+		if err := cli.heartbeat(); err != nil {
 			log.Printf("heartbeat failed: %v", err)
 		} else {
 			log.Printf("heartbeat ok")
@@ -813,7 +867,7 @@ func main() {
 		case <-invTicker.C:
 			runCycle(true)
 		case <-hbTicker.C:
-			if err := cli.heartbeat(cfg.DeviceID); err != nil {
+			if err := cli.heartbeat(); err != nil {
 				log.Printf("heartbeat failed: %v", err)
 			} else {
 				log.Printf("heartbeat ok")

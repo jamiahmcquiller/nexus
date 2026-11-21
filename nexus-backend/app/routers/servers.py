@@ -13,7 +13,7 @@ from ..auth import get_current_user
 from ..database import get_db
 from ..models import User
 from ..models_extended import Server, ServerHealthCheck, ServerPatchWindow
-from ._crud import _get_or_404, _serialize, crud_router
+from ._crud import _get_or_404, _serialize, crud_router, WRITE
 
 router = APIRouter()
 # NOTE: sub-routers first — see assets.py. /api/v1/servers/{item_id}
@@ -24,7 +24,7 @@ router.include_router(crud_router("/api/v1/servers", Server, "servers"))
 
 
 @router.post("/api/v1/servers/patch-windows/{window_id}/approve")
-def approve_patch_window(window_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def approve_patch_window(window_id: str, db: Session = Depends(get_db), current_user: User = Depends(WRITE)):
     window = _get_or_404(db, ServerPatchWindow, window_id, current_user)
     window.approval_status = "approved"
     db.commit()

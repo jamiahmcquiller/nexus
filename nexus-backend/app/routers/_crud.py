@@ -15,9 +15,16 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Session
 
-from ..auth import get_current_user
+from ..auth import get_current_user, require_role
 from ..database import get_db
 from ..models import AuditEvent, User
+
+# Write tiers, applied to every crud_router resource and documented in
+# docs/security.md. Reads stay open to any authenticated role.
+# - create / update / status: owner, admin, technician (auditor is read-only)
+# - delete: owner, admin only (destructive)
+WRITE = require_role(["admin", "technician"])
+DELETE = require_role(["owner", "admin"])
 
 
 def _columns(model):
@@ -120,7 +127,7 @@ def crud_router(prefix: str, model, tag: str, audit_prefix: str | None = None) -
         return out
 
     @router.post("/", status_code=201)
-    def create_item(payload: dict, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    def create_item(payload: dict, db: Session = Depends(get_db), current_user: User = Depends(WRITE)):
         row = model(tenant_id=current_user.tenant_id)
         _apply_payload(row, payload)
         db.add(row)
@@ -137,15 +144,24 @@ def crud_router(prefix: str, model, tag: str, audit_prefix: str | None = None) -
         return _serialize(row)
 
     @router.patch("/{item_id}")
-    def update_item(item_id: str, payload: dict, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    def update_item(item_id: str, payload: dict, db: Session = Depends(get_db), current_user: User = Depends(WRITE)):
         row = _get_or_404(db, model, item_id, current_user)
         _apply_payload(row, payload)
         db.commit()
         db.refresh(row)
         return _serialize(row)
 
+    @router.delete("/{item_id}")
+    def delete_item(item_id: str, db: Session = Depends(get_db), current_user: User = Depends(DELETE)):
+        row = _get_or_404(db, model, item_id, current_user)
+        if audit_prefix:
+            _audit(db, audit_prefix, "deleted", row, current_user)
+        db.delete(row)
+        db.commit()
+        return {"deleted": str(row.id)}
+
     @router.post("/{item_id}/status")
-    def set_status(item_id: str, payload: dict, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    def set_status(item_id: str, payload: dict, db: Session = Depends(get_db), current_user: User = Depends(WRITE)):
         row = _get_or_404(db, model, item_id, current_user)
         if "status" not in _columns(model):
             raise HTTPException(status_code=400, detail="This record has no status field")
@@ -161,6 +177,98 @@ def crud_router(prefix: str, model, tag: str, audit_prefix: str | None = None) -
         return _serialize(row)
 
     return router
+
+
+def write_routes(router: APIRouter, model, audit_prefix: str | None = None,
+                 defaults: dict | None = None, required: list[str] | None = None,
+                 status_column: str = "status",
+                 status_values: list[str] | None = None,
+                 on_delete=None, on_create=None, stats: bool = False) -> None:
+    """Add the write side (create / get / update / delete / status) to a
+    router that already defines its own list + stats endpoints.
+
+    Used by the modules whose routers predate crud_router (patches,
+    vulnerabilities, alerts, policies, compliance, devices). `defaults`
+    fills required columns the console's generic Add box does not send
+    (e.g. a policy's policy_type); `required` rejects a create that is
+    missing a field no default can invent (e.g. a compliance result's
+    device_id) with a 400 instead of a database error. `status_column`
+    lets devices map the generic status action onto enrollment_status.
+    `on_delete`, when given, runs before the row is deleted (devices use
+    it to remove that device's snapshots and queued commands).
+    """
+    defaults = defaults or {}
+    required = required or []
+
+    if stats:
+        @router.get("/stats")
+        def stats_endpoint(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+            q = db.query(model).filter(model.tenant_id == current_user.tenant_id)
+            total = q.count()
+            out = {"total": total}
+            if "status" in _columns(model):
+                for s in ("active", "open", "new", "available", "deployed", "detected", "scheduled"):
+                    out[s] = q.filter(model.status == s).count()
+            return out
+
+    @router.post("/", status_code=201)
+    def create_item(payload: dict, db: Session = Depends(get_db), current_user: User = Depends(WRITE)):
+        merged = {**defaults, **payload}
+        missing = [f for f in required if not merged.get(f)]
+        if missing:
+            raise HTTPException(status_code=400, detail=f"Missing required field(s): {', '.join(missing)}")
+        row = model(tenant_id=current_user.tenant_id)
+        _apply_payload(row, merged)
+        if on_create:
+            on_create(row, merged)
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        if audit_prefix:
+            _audit(db, audit_prefix, "created", row, current_user)
+            db.commit()
+        return _serialize(row)
+
+    @router.get("/{item_id}")
+    def get_item(item_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+        return _serialize(_get_or_404(db, model, item_id, current_user))
+
+    @router.patch("/{item_id}")
+    def update_item(item_id: str, payload: dict, db: Session = Depends(get_db), current_user: User = Depends(WRITE)):
+        row = _get_or_404(db, model, item_id, current_user)
+        _apply_payload(row, payload)
+        db.commit()
+        db.refresh(row)
+        return _serialize(row)
+
+    @router.delete("/{item_id}")
+    def delete_item(item_id: str, db: Session = Depends(get_db), current_user: User = Depends(DELETE)):
+        row = _get_or_404(db, model, item_id, current_user)
+        if on_delete:
+            on_delete(db, row)
+        if audit_prefix:
+            _audit(db, audit_prefix, "deleted", row, current_user)
+        db.delete(row)
+        db.commit()
+        return {"deleted": str(row.id)}
+
+    @router.post("/{item_id}/status")
+    def set_status(item_id: str, payload: dict, db: Session = Depends(get_db), current_user: User = Depends(WRITE)):
+        row = _get_or_404(db, model, item_id, current_user)
+        if status_column not in _columns(model):
+            raise HTTPException(status_code=400, detail="This record has no status field")
+        if status_values is not None and payload.get("status") not in status_values:
+            raise HTTPException(status_code=400, detail=f"status must be one of: {', '.join(status_values)}")
+        setattr(row, status_column, payload.get("status"))
+        if payload.get("attributes"):
+            _apply_payload(row, {"attributes": payload["attributes"]})
+        db.commit()
+        db.refresh(row)
+        if audit_prefix:
+            _audit(db, audit_prefix, "status_changed", row, current_user,
+                   {"status": getattr(row, status_column)})
+            db.commit()
+        return _serialize(row)
 
 
 def _get_or_404(db, model, item_id, current_user):

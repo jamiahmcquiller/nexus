@@ -12,7 +12,7 @@ from ..auth import get_current_user
 from ..database import get_db
 from ..models import User
 from ..models_extended import RemoteAnnouncement, RemoteSession, SystemToolJob
-from ._crud import _get_or_404, _serialize, crud_router
+from ._crud import _get_or_404, _serialize, crud_router, WRITE
 
 router = APIRouter()
 router.include_router(crud_router("/api/v1/remote/sessions", RemoteSession, "remote"))
@@ -21,7 +21,7 @@ router.include_router(crud_router("/api/v1/remote/system-tools", SystemToolJob, 
 
 
 @router.post("/api/v1/remote/sessions/{session_id}/end")
-def end_session(session_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def end_session(session_id: str, db: Session = Depends(get_db), current_user: User = Depends(WRITE)):
     from datetime import datetime
     session = _get_or_404(db, RemoteSession, session_id, current_user)
     session.status = "ended"

@@ -7,11 +7,12 @@ enrollment token, runs them as its own user, and reports the result.
 Security model:
 - Creating a command (or waking a device) requires a signed-in
   owner/admin JWT. Every creation writes an AuditEvent naming the user.
-- The agent authenticates with the enrollment token; the token's tenant
-  must match the command's tenant, and a command addressed to a specific
-  device is only visible to that device (device_id null = any online
-  agent in the tenant may claim it, which is how Wake-on-LAN works:
-  the sender is whichever agent is on the target's LAN).
+- The agent authenticates with its own per-device credential, issued
+  at enrollment and sent as the X-Device-Token header. An enrollment
+  token can never poll or complete commands. A command addressed to a
+  specific device is only visible to that device (device_id null = any
+  online agent in the tenant may claim it, which is how Wake-on-LAN
+  works: the sender is whichever agent is on the target's LAN).
 - Results are stored on the command record (output truncated to 100 KB),
   so the queue itself is the audit trail.
 - The agent enforces its own execution timeout and runs nothing
@@ -33,7 +34,7 @@ from ..auth import get_current_user, require_role
 from ..database import get_db
 from ..models import Device, DeviceInventorySnapshot, AuditEvent, User
 from ..models_extended import AgentCommand
-from .devices import _tenant_from_token
+from .devices import get_current_device
 from ._crud import _get_or_404, _serialize
 
 router = APIRouter(prefix="/api/v1/agent", tags=["agent"])
@@ -101,24 +102,19 @@ def list_commands(status: Optional[str] = None, device_id: Optional[str] = None,
     return [_serialize(c) for c in q.order_by(AgentCommand.created_at.desc()).limit(200).all()]
 
 
-def _agent_tenant(token: Optional[str]) -> uuid.UUID:
-    if not token:
-        raise HTTPException(status_code=401, detail="enrollment token required")
-    return _tenant_from_token(token)
-
-
 @router.get("/commands/next")
-def next_command(device_id: str, enrollment_token: Optional[str] = None,
+def next_command(device_id: str, device: Device = Depends(get_current_device),
                  db: Session = Depends(get_db)):
     """Oldest pending command for this device, or any tenant-wide command.
 
     Claims the command in the same request so two agents cannot run it.
-    Returns 204 with no body when nothing is pending.
+    Returns 204 with no body when nothing is pending. The caller must
+    be the device it claims to be: the X-Device-Token credential has
+    to belong to the device_id in the path.
     """
-    tenant_id = _agent_tenant(enrollment_token)
-    device = db.query(Device).filter(Device.device_id == device_id).first()
-    if not device or device.tenant_id != tenant_id:
-        raise HTTPException(status_code=404, detail="Device not found")
+    if device.device_id != device_id:
+        raise HTTPException(status_code=403, detail="Device token does not match this device")
+    tenant_id = device.tenant_id
     # Stale claims (agent died mid-run) go back to pending after 10 minutes.
     stale_at = datetime.utcnow() - timedelta(minutes=10)
     db.query(AgentCommand).filter(
@@ -155,15 +151,17 @@ def get_command(command_id: str, db: Session = Depends(get_db),
 
 @router.post("/commands/{command_id}/complete")
 def complete_command(command_id: str, req: CommandComplete,
-                     enrollment_token: Optional[str] = None,
+                     device: Device = Depends(get_current_device),
                      db: Session = Depends(get_db)):
-    tenant_id = _agent_tenant(enrollment_token)
+    tenant_id = device.tenant_id
     cmd = db.query(AgentCommand).filter(
         AgentCommand.id == uuid.UUID(command_id),
         AgentCommand.tenant_id == tenant_id,
     ).first()
     if not cmd:
         raise HTTPException(status_code=404, detail="Command not found")
+    if cmd.claimed_by_device_id is not None and cmd.claimed_by_device_id != device.id:
+        raise HTTPException(status_code=403, detail="Command was claimed by another device")
     if cmd.status in ("succeeded", "failed"):
         return _serialize(cmd)  # idempotent: a retried completion is a no-op
     cmd.status = "succeeded" if (req.exit_code in (None, 0)) else "failed"

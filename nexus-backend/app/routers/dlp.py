@@ -12,7 +12,7 @@ from ..auth import get_current_user
 from ..database import get_db
 from ..models import User
 from ..models_extended import DataContainer, DlpIncident, DlpPolicy, SensitiveDataFinding
-from ._crud import _get_or_404, _serialize, crud_router
+from ._crud import _get_or_404, _serialize, crud_router, DELETE
 
 router = APIRouter()
 router.include_router(crud_router("/api/v1/dlp/findings", SensitiveDataFinding, "dlp"))
@@ -22,7 +22,7 @@ router.include_router(crud_router("/api/v1/dlp/containers", DataContainer, "dlp"
 
 
 @router.post("/api/v1/dlp/containers/{container_id}/wipe")
-def wipe_container(container_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def wipe_container(container_id: str, db: Session = Depends(get_db), current_user: User = Depends(DELETE)):
     container = _get_or_404(db, DataContainer, container_id, current_user)
     container.status = "wiped"
     db.commit()

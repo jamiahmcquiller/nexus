@@ -23,7 +23,7 @@ from ..models_extended import (
     GrcAssessment, GrcAudit, GrcControl, GrcControlMapping, GrcEvidence,
     GrcFinding, GrcFramework, GrcRemediation, GrcRisk, GrcSetting,
 )
-from ._crud import _get_or_404, _serialize, crud_router
+from ._crud import _get_or_404, _serialize, crud_router, WRITE
 
 router = APIRouter(prefix="/api/v1/grc", tags=["grc"])
 
@@ -330,62 +330,62 @@ def clear_demo(db: Session = Depends(get_db),
 
 # ---------------------------------------------------------------- workflows
 @router.post("/assessments/{item_id}/start")
-def start_assessment(item_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def start_assessment(item_id: str, db: Session = Depends(get_db), current_user: User = Depends(WRITE)):
     return _transition(db, GrcAssessment, "grc_assessment", item_id, current_user, "in_progress", "started")
 
 
 @router.post("/assessments/{item_id}/complete")
-def complete_assessment(item_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def complete_assessment(item_id: str, db: Session = Depends(get_db), current_user: User = Depends(WRITE)):
     return _transition(db, GrcAssessment, "grc_assessment", item_id, current_user, "complete", "completed")
 
 
 @router.post("/evidence/{item_id}/approve")
-def approve_evidence(item_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def approve_evidence(item_id: str, db: Session = Depends(get_db), current_user: User = Depends(WRITE)):
     return _transition(db, GrcEvidence, "grc_evidence", item_id, current_user, "approved", "approved")
 
 
 @router.post("/evidence/{item_id}/reject")
-def reject_evidence(item_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def reject_evidence(item_id: str, db: Session = Depends(get_db), current_user: User = Depends(WRITE)):
     return _transition(db, GrcEvidence, "grc_evidence", item_id, current_user, "rejected", "rejected")
 
 
 @router.post("/findings/{item_id}/remediate")
-def remediate_finding(item_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def remediate_finding(item_id: str, db: Session = Depends(get_db), current_user: User = Depends(WRITE)):
     return _transition(db, GrcFinding, "grc_finding", item_id, current_user, "remediated", "remediated")
 
 
 @router.post("/findings/{item_id}/accept")
-def accept_finding(item_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def accept_finding(item_id: str, db: Session = Depends(get_db), current_user: User = Depends(WRITE)):
     return _transition(db, GrcFinding, "grc_finding", item_id, current_user, "accepted", "accepted")
 
 
 @router.post("/risks/{item_id}/accept")
-def accept_risk(item_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def accept_risk(item_id: str, db: Session = Depends(get_db), current_user: User = Depends(WRITE)):
     return _transition(db, GrcRisk, "grc_risk", item_id, current_user, "accepted", "accepted")
 
 
 @router.post("/risks/{item_id}/mitigate")
-def mitigate_risk(item_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def mitigate_risk(item_id: str, db: Session = Depends(get_db), current_user: User = Depends(WRITE)):
     return _transition(db, GrcRisk, "grc_risk", item_id, current_user, "mitigated", "mitigated")
 
 
 @router.post("/remediations/{item_id}/complete")
-def complete_remediation(item_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def complete_remediation(item_id: str, db: Session = Depends(get_db), current_user: User = Depends(WRITE)):
     return _transition(db, GrcRemediation, "grc_remediation", item_id, current_user, "complete", "completed")
 
 
 @router.post("/audits/{item_id}/complete")
-def complete_audit(item_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def complete_audit(item_id: str, db: Session = Depends(get_db), current_user: User = Depends(WRITE)):
     return _transition(db, GrcAudit, "grc_audit", item_id, current_user, "complete", "completed")
 
 
 @router.post("/frameworks/{item_id}/activate")
-def activate_framework(item_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def activate_framework(item_id: str, db: Session = Depends(get_db), current_user: User = Depends(WRITE)):
     return _transition(db, GrcFramework, "grc_framework", item_id, current_user, "active", "activated")
 
 
 @router.post("/frameworks/{item_id}/retire")
-def retire_framework(item_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def retire_framework(item_id: str, db: Session = Depends(get_db), current_user: User = Depends(WRITE)):
     return _transition(db, GrcFramework, "grc_framework", item_id, current_user, "retired", "retired")
 
 

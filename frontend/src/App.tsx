@@ -309,6 +309,7 @@ function App() {
   const [homeStats, setHomeStats] = useState<Record<string, number>>({})
   const [attentionItems, setAttentionItems] = useState<any[]>([])
   const [newName, setNewName] = useState('')
+  const [editingId, setEditingId] = useState<string | null>(null)
   const [notice, setNotice] = useState('')
   const [navQuery, setNavQuery] = useState('')
   const [theme, setTheme] = useState<ThemeMode>(storedTheme)
@@ -316,6 +317,10 @@ function App() {
   const [backendStatus, setBackendStatus] = useState<'checking' | 'ok' | 'unreachable'>('checking')
 
   const workspaceDef: WorkspaceDef = getWorkspace(workspace)
+  // Role gates for the write controls. The backend enforces the same
+  // rules; these only hide buttons a role could never use.
+  const canWrite = !!sessionUser && ['owner', 'admin', 'technician'].includes(sessionUser.role)
+  const canDelete = !!sessionUser && ['owner', 'admin'].includes(sessionUser.role)
   const workspaceModules = MODULES.filter((m) => m.workspace === workspace)
   const navModules = navQuery.trim()
     ? workspaceModules.filter((m) => m.label.toLowerCase().includes(navQuery.trim().toLowerCase()))
@@ -346,7 +351,7 @@ function App() {
 
   useEffect(() => { checkBackend() }, [checkBackend])
 
-  const headers = token ? { Authorization: `Bearer ${token}` } : {}
+  const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {}
 
   // Resolve the signed-in user and the workspaces they may open.
   // One token authorizes both workspaces — this call re-validates
@@ -458,6 +463,8 @@ function App() {
     setModule(id)
     setSubsection('')
     setNotice('')
+    setEditingId(null)
+    setNewName('')
   }
 
   // Switch workspaces on the same sign-in: the token is untouched,
@@ -512,12 +519,40 @@ function App() {
   const createItem = async () => {
     if (!newName.trim()) return
     try {
-      await axios.post(`${API}${endpoint}`, { title: newName, name: newName }, { headers })
+      if (editingId) {
+        // Edit: the Add box doubles as the edit box while editing.
+        await axios.patch(`${API}${endpoint}${editingId}`, { title: newName, name: newName }, { headers })
+        setEditingId(null)
+        setNotice('Updated.')
+      } else {
+        await axios.post(`${API}${endpoint}`, { title: newName, name: newName }, { headers })
+        setNotice('Created.')
+      }
       setNewName('')
-      setNotice('Created.')
       load()
     } catch (err: any) {
-      setNotice(err.response?.data?.detail || 'Create failed')
+      setNotice(err.response?.data?.detail || 'Save failed')
+    }
+  }
+
+  const editItem = (item: any) => {
+    setEditingId(item.id)
+    setNewName(displayName(item))
+  }
+
+  const cancelEdit = () => {
+    setEditingId(null)
+    setNewName('')
+  }
+
+  const deleteItem = async (item: any) => {
+    if (!window.confirm(`Delete ${displayName(item)}? This cannot be undone.`)) return
+    try {
+      await axios.delete(`${API}${endpoint}${item.id}`, { headers })
+      setNotice('Deleted.')
+      load()
+    } catch (err: any) {
+      setNotice(err.response?.data?.detail || 'Delete failed')
     }
   }
 
@@ -790,13 +825,22 @@ function App() {
                   ))}
                   {Object.keys(stats).length === 0 && <div className="text-nexus-slate">No stats yet</div>}
                 </div>
-                <div className="flex gap-2 mt-4">
-                  <input className="nexus-input flex-1 p-2 text-sm" placeholder="New record name / title" value={newName} onChange={(e) => setNewName(e.target.value)} />
-                  <button className="bg-nexus-teal hover:bg-nexus-tealDark text-white px-4 rounded text-sm font-medium" onClick={createItem}>Add</button>
-                  {module === 'scheduler' && (
+                {/* The scheduler endpoint is read-only (runs list only),
+                    so there is no Add box here — just the Run now button. */}
+                {module !== 'scheduler' && canWrite && (
+                  <div className="flex gap-2 mt-4">
+                    <input className="nexus-input flex-1 p-2 text-sm" placeholder={editingId ? 'Edit record name / title' : 'New record name / title'} value={newName} onChange={(e) => setNewName(e.target.value)} />
+                    <button className="bg-nexus-teal hover:bg-nexus-tealDark text-white px-4 rounded text-sm font-medium" onClick={createItem}>{editingId ? 'Save' : 'Add'}</button>
+                    {editingId && (
+                      <button className="border border-nexus-border rounded px-4 text-sm" onClick={cancelEdit}>Cancel</button>
+                    )}
+                  </div>
+                )}
+                {module === 'scheduler' && (
+                  <div className="flex gap-2 mt-4">
                     <button className="text-white px-4 rounded text-sm font-medium" style={{ background: '#218568' }} onClick={runSchedulerNow}>Run now</button>
-                  )}
-                </div>
+                  </div>
+                )}
                 {notice && <p className="text-sm text-nexus-slate mt-2">{notice}</p>}
               </div>
               <div className="nexus-card">
@@ -815,7 +859,10 @@ function App() {
                     </thead>
                     <tbody>
                       {items.map((item) => {
-                        const badge = statusBadgeClasses(item.severity || item.status)
+                        // Devices carry their workflow state in
+                        // enrollment_status, not status — show that.
+                        const effStatus = item.status || item.enrollment_status || ''
+                        const badge = statusBadgeClasses(item.severity || effStatus)
                         return (
                           <tr key={item.id} className="nexus-table-row border-b border-nexus-border align-top">
                             <td className="py-2 pr-2 font-medium">{displayName(item)}</td>
@@ -828,26 +875,39 @@ function App() {
                               )}
                             </td>
                             <td className="py-2 pr-2">
-                              <span className="inline-flex items-center gap-1.5">
-                                <span className="inline-block w-2 h-2 rounded-full" style={{ background: statusBadgeClasses(item.status).color }} title={`Status tone: ${statusTone(item.status)}`} />
-                                <select
-                                  className="nexus-input !w-auto px-2 py-1 text-xs"
-                                  value={item.status || ''}
-                                  onChange={(e) => setStatus(item, e.target.value)}
-                                  aria-label={`Status for ${displayName(item)}`}
-                                >
-                                  <option value="">{item.status || '—'}</option>
-                                  {STATUS_OPTIONS.filter((s) => s !== item.status).map((s) => (
-                                    <option key={s} value={s}>{s}</option>
-                                  ))}
-                                </select>
-                              </span>
+                              {module === 'scheduler' ? (
+                                <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ color: badge.color, background: badge.background }}>
+                                  {effStatus || '—'}
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1.5">
+                                  <span className="inline-block w-2 h-2 rounded-full" style={{ background: statusBadgeClasses(effStatus).color }} title={`Status tone: ${statusTone(effStatus)}`} />
+                                  <select
+                                    className="nexus-input !w-auto px-2 py-1 text-xs"
+                                    value={effStatus}
+                                    onChange={(e) => setStatus(item, e.target.value)}
+                                    aria-label={`Status for ${displayName(item)}`}
+                                    disabled={!canWrite}
+                                  >
+                                    <option value="">{effStatus || '—'}</option>
+                                    {STATUS_OPTIONS.filter((s) => s !== effStatus).map((s) => (
+                                      <option key={s} value={s}>{s}</option>
+                                    ))}
+                                  </select>
+                                </span>
+                              )}
                             </td>
                             <td className="py-2">
                               <div className="flex flex-wrap gap-1">
                                 {workflowButtons(item).map((b) => (
                                   <button key={b.action} className="border border-nexus-border rounded px-2 py-1 text-xs hover:bg-nexus-cloud" onClick={() => workflowAction(b.action, item)}>{b.label}</button>
                                 ))}
+                                {canWrite && module !== 'scheduler' && (
+                                  <button className="border border-nexus-border rounded px-2 py-1 text-xs hover:bg-nexus-cloud" onClick={() => editItem(item)}>Edit</button>
+                                )}
+                                {canDelete && module !== 'scheduler' && (
+                                  <button className="border rounded px-2 py-1 text-xs hover:bg-nexus-cloud" style={{ borderColor: '#E5AFB0', color: '#C64D4D' }} onClick={() => deleteItem(item)}>Delete</button>
+                                )}
                               </div>
                             </td>
                           </tr>
