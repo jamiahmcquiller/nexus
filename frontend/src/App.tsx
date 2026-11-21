@@ -1,7 +1,14 @@
 import { useState, useEffect } from 'react'
 import axios from 'axios'
 
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+const API = (() => {
+  if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL
+  if (typeof window !== 'undefined' && window.location.hostname.includes('app.github.dev')) {
+    // Codespaces: frontend is on -5173, backend is on -8000
+    return window.location.origin.replace('-5173', '-8000')
+  }
+  return 'http://localhost:8000'
+})()
 
 const MODULES = [
   { id: 'dashboard', label: 'Dashboard' },
