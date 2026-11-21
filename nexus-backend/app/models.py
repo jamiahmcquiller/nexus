@@ -60,7 +60,64 @@ class DeviceGroup(Base):
     device_id = Column(UUID(as_uuid=True), ForeignKey("devices.id"), primary_key=True)
     group_id = Column(UUID(as_uuid=True), ForeignKey("groups.id"), primary_key=True)
 
-class AuditEvent(Base):
+class Patch(Base):
+    __tablename__ = "patches"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    title = Column(String, nullable=False)
+    kb_id = Column(String)
+    severity = Column(String)  # critical, important, moderate, low
+    status = Column(String, default="available")  # available, testing, approved, declined, deployed
+    product = Column(String)
+    attributes = Column(JSON, default=dict)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class Vulnerability(Base):
+    __tablename__ = "vulnerabilities"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    cve_id = Column(String)
+    title = Column(String, nullable=False)
+    severity = Column(String)
+    cvss_score = Column(String)
+    status = Column(String, default="open")  # open, mitigated, remediated, accepted
+    device_id = Column(UUID(as_uuid=True), ForeignKey("devices.id"))
+    attributes = Column(JSON, default=dict)
+    detected_at = Column(DateTime, default=datetime.utcnow)
+
+class SecurityAlert(Base):
+    __tablename__ = "security_alerts"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    title = Column(String, nullable=False)
+    severity = Column(String)
+    category = Column(String)  # edr, malware, ransomware, dlp, browser
+    status = Column(String, default="new")  # new, investigating, contained, resolved
+    device_id = Column(UUID(as_uuid=True), ForeignKey("devices.id"))
+    attributes = Column(JSON, default=dict)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class Policy(Base):
+    __tablename__ = "policies"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    name = Column(String, nullable=False)
+    policy_type = Column(String, nullable=False)  # patch, compliance, app_control, encryption, browser, mdm
+    status = Column(String, default="draft")
+    definition = Column(JSON, default=dict)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class ComplianceResult(Base):
+    __tablename__ = "compliance_results"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    device_id = Column(UUID(as_uuid=True), ForeignKey("devices.id"), nullable=False)
+    benchmark = Column(String)  # CIS, NIST, Cyber Essentials
+    score = Column(String)
+    status = Column(String)  # compliant, non_compliant
+    findings = Column(JSON, default=list)
+    assessed_at = Column(DateTime, default=datetime.utcnow)
+
     __tablename__ = "audit_events"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)

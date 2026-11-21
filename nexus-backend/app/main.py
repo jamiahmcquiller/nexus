@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .database import engine, Base
-from .routers import auth, devices
+from .routers import auth, devices, patches, vulnerabilities, alerts, policies, compliance
 
 # Create tables
 Base.metadata.create_all(bind=engine)
@@ -22,6 +22,11 @@ app.add_middleware(
 
 app.include_router(auth.router)
 app.include_router(devices.router)
+app.include_router(patches.router)
+app.include_router(vulnerabilities.router)
+app.include_router(alerts.router)
+app.include_router(policies.router)
+app.include_router(compliance.router)
 
 @app.get("/health")
 async def health():
