@@ -34,15 +34,18 @@ HONESTY — these rows are SAMPLE data, not live telemetry:
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from ..auth import require_role
 from ..database import get_db
 from ..models import (
-    AuditEvent, Device, Patch, Policy, User, Vulnerability,
+    AuditEvent, ComplianceResult, Device, DeviceInventorySnapshot,
+    Patch, Policy, SecurityAlert, User, Vulnerability,
 )
 from ..models_extended import (
-    IncidentResponse, MalwareDetection, PatchDeployment,
+    AgentCommand, IncidentResponse, MalwareDetection, PatchDeployment,
+    RemediationConfiguration, RemediationConfigurationSend,
     SensitiveDataFinding, Server,
 )
 
@@ -659,17 +662,129 @@ def clear_demo(db: Session = Depends(get_db),
                current_user: User = Depends(require_role(["owner", "admin"]))):
     tid = current_user.tenant_id
     deleted = {}
-    # Children first so FKs never block the delete. Only is_demo rows,
-    # only in the models this seed writes — GRC demo rows have their
-    # own clear-demo and are never touched here, and real rows (like
-    # the enrolled Mac, is_demo=False) always survive.
-    for name, model in DEMO_MODELS:
-        rows = db.query(model).filter(
-            model.tenant_id == tid, model.is_demo.is_(True)).all()
-        deleted[name] = len(rows)
+    # Rows in tables with no is_demo column of their own, deleted here
+    # as FK hygiene. They are NOT part of the response's `deleted`
+    # counts (that stays exactly DEMO_MODELS, the contract the home
+    # screens and tests assert on) — they are recorded in the audit
+    # event's counts instead.
+    extra_deleted = {}
+
+    def _delete(query):
+        rows = query.all()
         for row in rows:
             db.delete(row)
+        # Flush after each model so the child-first order below is
+        # enforced at the database, not left to SQLAlchemy's
+        # single-flush unit-of-work sorting at commit time.
+        db.flush()
+        return len(rows)
+
+    # --- which rows are demo, by membership, not only by flag --------
+    # BUG 1 (live Postgres: IntegrityError / ForeignKeyViolation on
+    # DELETE FROM devices, vulnerabilities_device_id_fkey): the old
+    # code deleted only rows whose own is_demo flag is True. A child
+    # row that references a demo device but whose is_demo is False or
+    # NULL — seeded before the flag existed, or backfilled with
+    # DEFAULT FALSE by ensure_is_demo_columns — was never in the
+    # delete set, so the device delete tripped the FK and the whole
+    # clear rolled back (and seed then refused, "demo data already
+    # exists"). Reproduced in tests/test_clear_demo.py with SQLite FK
+    # enforcement ON: plain seed -> clear passes on the old code, so
+    # the loop order was never the bug; the stale flag was. The fix:
+    # every device-referencing row is demo if it points at a demo
+    # device, whatever its own flag says. The demo device set itself
+    # is still is_demo=True only — never a device_id prefix — so a
+    # real row that merely looks like a demo id (see
+    # test_real_mac_survives_seed_and_clear_demo) always survives.
+    demo_device_ids = [
+        row.id for row in db.query(Device.id).filter(
+            Device.tenant_id == tid, Device.is_demo.is_(True)).all()
+    ]
+    demo_vuln_ids = [
+        row.id for row in db.query(Vulnerability.id).filter(
+            Vulnerability.tenant_id == tid,
+            or_(Vulnerability.is_demo.is_(True),
+                Vulnerability.device_id.in_(demo_device_ids))).all()
+    ]
+    demo_config_ids = [
+        row.id for row in db.query(RemediationConfiguration.id).filter(
+            RemediationConfiguration.tenant_id == tid,
+            or_(RemediationConfiguration.is_demo.is_(True),
+                RemediationConfiguration.vulnerability_id.in_(demo_vuln_ids))).all()
+    ]
+
+    # --- child-first deletes, in dependency order --------------------
+    # 1. Remediation sends first: they FK to configurations,
+    #    vulnerabilities, devices AND agent commands.
+    extra_deleted["remediation_configuration_sends"] = _delete(
+        db.query(RemediationConfigurationSend).filter(
+            RemediationConfigurationSend.tenant_id == tid,
+            or_(
+                RemediationConfigurationSend.device_id.in_(demo_device_ids),
+                RemediationConfigurationSend.vulnerability_id.in_(demo_vuln_ids),
+                RemediationConfigurationSend.configuration_id.in_(demo_config_ids),
+            )))
+    # 2. Remediation configurations: they FK to vulnerabilities.
+    extra_deleted["remediation_configurations"] = _delete(
+        db.query(RemediationConfiguration).filter(
+            RemediationConfiguration.tenant_id == tid,
+            RemediationConfiguration.id.in_(demo_config_ids)))
+    # 3. Patch deployments before patches (deployment.patch_id FK).
+    deleted["patch_deployments"] = _delete(
+        db.query(PatchDeployment).filter(
+            PatchDeployment.tenant_id == tid,
+            PatchDeployment.is_demo.is_(True)))
+    # 4-7. Device-referencing demo models: flagged OR pointing at a
+    #    demo device — this is where the stale-flag rows live.
+    for name, model in (
+        ("vulnerabilities", Vulnerability),
+        ("incidents", IncidentResponse),
+        ("malware_detections", MalwareDetection),
+        ("dlp_findings", SensitiveDataFinding),
+    ):
+        deleted[name] = _delete(
+            db.query(model).filter(
+                model.tenant_id == tid,
+                or_(model.is_demo.is_(True),
+                    model.device_id.in_(demo_device_ids))))
+    # 8-11. Tables with no is_demo column: demo-linked by device only.
+    #    Alerts after incidents (incident.alert_id FKs to alerts);
+    #    commands after sends (send.command_id FKs to commands).
+    extra_deleted["security_alerts"] = _delete(
+        db.query(SecurityAlert).filter(
+            SecurityAlert.tenant_id == tid,
+            SecurityAlert.device_id.in_(demo_device_ids)))
+    extra_deleted["compliance_results"] = _delete(
+        db.query(ComplianceResult).filter(
+            ComplianceResult.tenant_id == tid,
+            ComplianceResult.device_id.in_(demo_device_ids)))
+    extra_deleted["device_inventory_snapshots"] = _delete(
+        db.query(DeviceInventorySnapshot).filter(
+            DeviceInventorySnapshot.tenant_id == tid,
+            DeviceInventorySnapshot.device_id.in_(demo_device_ids)))
+    extra_deleted["agent_commands"] = _delete(
+        db.query(AgentCommand).filter(
+            AgentCommand.tenant_id == tid,
+            or_(
+                AgentCommand.device_id.in_(demo_device_ids),
+                AgentCommand.target_device_id.in_(demo_device_ids),
+                AgentCommand.claimed_by_device_id.in_(demo_device_ids),
+            )))
+    # 12-15. The remaining seeded models, flagged rows only.
+    for name, model in (
+        ("patches", Patch),
+        ("policies", Policy),
+        ("devices", Device),
+        ("servers", Server),
+    ):
+        deleted[name] = _delete(
+            db.query(model).filter(
+                model.tenant_id == tid, model.is_demo.is_(True)))
     db.commit()
-    _audit(db, "cleared", current_user, deleted)
+    # Only is_demo rows, only in this tenant, only demo-linked rows in
+    # the flag-less tables — GRC demo rows have their own clear-demo
+    # and are never touched here, and real rows (like the enrolled
+    # Mac, is_demo=False) always survive.
+    _audit(db, "cleared", current_user, {**deleted, **extra_deleted})
     db.commit()
     return {"cleared": True, "deleted": deleted}

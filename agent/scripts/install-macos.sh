@@ -1,5 +1,5 @@
 #!/bin/bash
-# NULL Endpoint Agent — macOS installer (v0.3.2)
+# NULL Endpoint Agent — macOS installer (v0.3.3)
 #
 # Installs an ALREADY-ENROLLED agent binary as a per-user LaunchAgent so
 # it runs persistently (RunAtLoad + KeepAlive) and checks in every
@@ -13,7 +13,7 @@
 # Defaults:
 #   --server  taken from agent-config.json (the server the device already
 #             talks to); pass --server to point it at a new backend URL.
-#   --binary  ~/Downloads/nexus-agent-v032
+#   --binary  ~/Downloads/nexus-agent-v033
 #   install home: ~/Library/Application Support/NULL/agent
 #
 # The original binary + config are left untouched in place as a backup
@@ -39,7 +39,7 @@
 set -euo pipefail
 
 LABEL="com.null.agent"
-DEFAULT_BINARY="$HOME/Downloads/nexus-agent-v032"
+DEFAULT_BINARY="$HOME/Downloads/nexus-agent-v033"
 DEFAULT_HOME="$HOME/Library/Application Support/NULL/agent"
 LAUNCHAGENTS_DIR="$HOME/Library/LaunchAgents"
 PLIST_PATH="$LAUNCHAGENTS_DIR/$LABEL.plist"
@@ -162,8 +162,8 @@ case "$BINARY" in
     ~*) BINARY="$HOME/${BINARY#\~\/}" ;;
 esac
 [ -f "$BINARY" ] || die "binary not found: $BINARY
-  Pass the path to the enrolled v0.3.2 binary, e.g.:
-      ./install-macos.sh --binary ~/Downloads/nexus-agent-v032"
+  Pass the path to the enrolled v0.3.3 binary, e.g.:
+      ./install-macos.sh --binary ~/Downloads/nexus-agent-v033"
 [ -x "$BINARY" ] || die "binary is not executable: $BINARY"
 
 SRC_CONFIG="$(dirname "$BINARY")/agent-config.json"

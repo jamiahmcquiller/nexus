@@ -19,6 +19,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import axios from 'axios'
 import { StatusBadge } from './StatusBadge'
 import { EmptyState } from './EmptyState'
+import { formatLocalDateTime } from '../time'
 
 type RemediationConfigManagerProps = {
   api: string
@@ -27,12 +28,8 @@ type RemediationConfigManagerProps = {
   canDelete: boolean
 }
 
-function formatUtc(iso: string | null | undefined): string {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return iso
-  return `${d.toLocaleString('en-US', { timeZone: 'UTC', dateStyle: 'medium', timeStyle: 'short' })} UTC`
-}
+// Send times render via ../time.ts — backend datetimes are naive
+// UTC and must be parsed as UTC before rendering in local time.
 
 const EMPTY_FORM = {
   name: '',
@@ -363,8 +360,8 @@ export function RemediationConfigManager({ api, headers, canWrite, canDelete }: 
                               {cmd?.exit_code != null && <span className="text-xs text-null-muted dark:text-[#8AA0B8]">exit {cmd.exit_code}</span>}
                             </span>
                             <span className="mt-0.5 block text-xs text-null-muted dark:text-[#8AA0B8]">
-                              Sent {formatUtc(s.created_at)}
-                              {cmd?.completed_at ? ` · completed ${formatUtc(cmd.completed_at)}` : cmd ? ' · awaiting agent result' : ''}
+                              Sent {formatLocalDateTime(s.created_at)}
+                              {cmd?.completed_at ? ` · completed ${formatLocalDateTime(cmd.completed_at)}` : cmd ? ' · awaiting agent result' : ''}
                             </span>
                             {cmd?.result ? (
                               <details className="mt-1">

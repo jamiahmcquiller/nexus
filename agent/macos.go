@@ -404,18 +404,139 @@ func (d macDisk) toMap() map[string]any {
 // "Apple_APFS") are not disks — their volumes belong to the physical
 // disk that hosts the container — and disk images / virtual disks are
 // excluded. Association of a container to its physical disk uses, in
-// order: a matching APFS container UUID, equal size between the
-// container and the physical disk's APFS partition, or (single-disk
-// machines) the only physical disk present.
+// order: a matching APFS physical store (APFSPhysicalStores), a
+// matching APFS container UUID, equal size between the container and
+// the physical disk's APFS partition, or (single-disk machines) the
+// only physical disk present.
+//
+// Bug 4 (real Mac snapshot 2026-11-21): the v0.3.2 parser trusted
+// fixture-only assumptions about the plist shape and the snapshot
+// came back as FOUR disks (disk1/disk2/disk3/disk4) — the shape of
+// the `df` fallback, meaning this function returned ZERO disks on
+// the real Mac and darwinDiskInfo silently fell back to df. Three
+// shape errors are fixed here, all against the documented schema
+// (aws ec2-macos-utils DiskPart, which mirrors `diskutil list
+// -plist`):
+//
+//   - Container volumes live under "APFSVolumes", not "Partitions".
+//     v0.3.2 read only Partitions, so every container yielded zero
+//     volumes. APFSVolume entries carry no Content key; they are
+//     APFS by definition. Both keys are now read (de-duplicated).
+//   - There is no "APFSContainerUUID" key on the container or its
+//     physical-store partition in that schema, so UUID matching
+//     could never fire. The direct link is "APFSPhysicalStores"
+//     (e.g. disk3 -> disk0s2), which is now match rule (0); UUID
+//     and size remain as fallbacks.
+//   - "WholeDisk" is not in that schema either, so requiring it
+//     skips every entry when the key is absent. An entry now counts
+//     as a whole disk when WholeDisk is true, or when the key is
+//     absent and the DeviceIdentifier is a bare whole-disk id
+//     (disk<N>); it is skipped only when WholeDisk is explicitly
+//     false or the id names a slice.
+//
+// If the listing contains NO physical disk at all (disk0 absent from
+// the parse, as in the real snapshot), the containers have nothing
+// to attach to. Returning zero disks would re-trigger the df
+// fallback that manufactured the four bogus entries, so exactly one
+// container is promoted instead: the booted-system container (the
+// one whose volumes include the "/" mount), else the largest
+// container. This runs ONLY when no physical disk was parsed, so a
+// present disk0 keeps the old behaviour (the Recovery/snapshot
+// container disk1 is skipped, never merged into the SSD).
+// isWholeDiskDevice reports whether a DeviceIdentifier names a whole
+// disk (disk<N>) rather than a slice (disk<N>s<M>, disk<N>s<M>s<P>).
+func isWholeDiskDevice(id string) bool {
+	rest := strings.TrimPrefix(id, "disk")
+	if rest == "" || rest == id {
+		return false
+	}
+	for _, r := range rest {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// summarizePlistEntries renders one compact "id:content:size,..."
+// summary of a Partitions or APFSVolumes array, for the diagnostic
+// log line in parseDiskutilList. defaultFS fills in the content for
+// entries that carry no Content key (APFSVolume entries are APFS).
+func summarizePlistEntries(raw []any, defaultFS string) string {
+	var parts []string
+	for _, r := range raw {
+		m, ok := r.(map[string]any)
+		if !ok {
+			continue
+		}
+		content := plistString(m, "Content")
+		if content == "" {
+			content = defaultFS
+		}
+		if content == "" {
+			content = "?"
+		}
+		size, _ := plistInt(m, "Size")
+		parts = append(parts, fmt.Sprintf("%s:%s:%d", plistString(m, "DeviceIdentifier"), content, size))
+	}
+	return strings.Join(parts, ",")
+}
+
+// appendDiskVolumes appends macVolume entries from a Partitions or
+// APFSVolumes array. apfsVolumes is true for APFSVolumes arrays,
+// whose entries carry no Content key — every entry is an APFS volume
+// (filesystem "apfs"). Entries are de-duplicated by device, so a
+// container that lists its volumes under both keys is not doubled.
+func appendDiskVolumes(vols []macVolume, raw []any, apfsVolumes bool) []macVolume {
+	seen := map[string]bool{}
+	for _, v := range vols {
+		seen[v.Device] = true
+	}
+	for _, r := range raw {
+		m, ok := r.(map[string]any)
+		if !ok {
+			continue
+		}
+		dev := plistString(m, "DeviceIdentifier")
+		if dev == "" {
+			continue
+		}
+		device := "/dev/" + dev
+		if seen[device] {
+			continue
+		}
+		seen[device] = true
+		size, _ := plistInt(m, "Size")
+		fs := plistString(m, "Content")
+		if apfsVolumes || fs == "Apple_APFS" {
+			fs = "apfs"
+		}
+		vols = append(vols, macVolume{
+			Device:     device,
+			Name:       plistString(m, "VolumeName"),
+			Mount:      plistString(m, "MountPoint"),
+			Filesystem: fs,
+			TotalGB:    size / bytesPerGB,
+			FreeGB:     -1,
+		})
+	}
+	return vols
+}
+
 func parseDiskutilList(data []byte) ([]macDisk, error) {
 	m, err := parsePlistXML(data)
 	if err != nil {
 		return nil, err
 	}
 	type containerInfo struct {
-		volumes []macVolume
-		uuid    string
-		size    int64
+		device   string // e.g. /dev/disk3
+		name     string
+		content  string
+		volumes  []macVolume
+		uuid     string
+		size     int64
+		stores   []string // APFSPhysicalStores, e.g. ["disk0s2"]
+		attached bool
 	}
 	type physInfo struct {
 		disk          macDisk
@@ -436,41 +557,48 @@ func parseDiskutilList(data []byte) ([]macDisk, error) {
 		}
 		size, _ := plistInt(dm, "Size")
 		content := plistString(dm, "Content")
-		if !plistBool(dm, "WholeDisk") {
+		uuid := plistString(dm, "APFSContainerUUID")
+		if uuid == "" {
+			uuid = plistString(dm, "ContainerUUID")
+		}
+		var stores []string
+		for _, sraw := range plistArray(dm, "APFSPhysicalStores") {
+			if sm, ok := sraw.(map[string]any); ok {
+				if s := plistString(sm, "APFSPhysicalStore"); s != "" {
+					stores = append(stores, s)
+				}
+			}
+		}
+		// Diagnostic: one concise line per raw diskutil entry, BEFORE
+		// any de-dup or classification, so the next run on the real
+		// Mac shows exactly what diskutil returned (in particular
+		// whether disk0 is present, which keys each entry carries,
+		// and where each container's volumes live).
+		log.Printf("diskutil: raw disk device=/dev/%s content=%s wholeDisk=%v virtual=%v virtualOrPhysical=%s size=%d containerUUID=%s physicalStores=[%s] partitions=[%s] apfsVolumes=[%s]",
+			devID, content, plistBool(dm, "WholeDisk"), plistBool(dm, "Virtual"), plistString(dm, "VirtualOrPhysical"), size, uuid, strings.Join(stores, ","),
+			summarizePlistEntries(plistArray(dm, "Partitions"), ""), summarizePlistEntries(plistArray(dm, "APFSVolumes"), "apfs"))
+		// WholeDisk is not a guaranteed key in `diskutil list -plist`
+		// output, so an absent key must not skip the entry: entries
+		// in AllDisksAndPartitions are whole disks by construction.
+		// Skip only when WholeDisk is explicitly false, or the key
+		// is absent and the id names a slice rather than a disk.
+		_, hasWholeDisk := dm["WholeDisk"]
+		if !plistBool(dm, "WholeDisk") && (hasWholeDisk || !isWholeDiskDevice(devID)) {
 			continue
 		}
-		if plistBool(dm, "Virtual") || content == "Apple_DiskImage" {
+		if plistBool(dm, "Virtual") || plistString(dm, "VirtualOrPhysical") == "Virtual" || content == "Apple_DiskImage" {
 			continue // disk image / virtual disk, not a physical disk
 		}
+		// Container volumes live under APFSVolumes on real output
+		// (Bug 4); Partitions is read too for older shapes. Either
+		// key alone suffices; both together are de-duplicated.
 		var vols []macVolume
-		for _, praw := range plistArray(dm, "Partitions") {
-			pm, ok := praw.(map[string]any)
-			if !ok {
-				continue
-			}
-			psize, _ := plistInt(pm, "Size")
-			pcontent := plistString(pm, "Content")
-			fs := pcontent
-			if pcontent == "Apple_APFS" {
-				fs = "apfs"
-			}
-			vols = append(vols, macVolume{
-				Device:     "/dev/" + plistString(pm, "DeviceIdentifier"),
-				Name:       plistString(pm, "VolumeName"),
-				Mount:      plistString(pm, "MountPoint"),
-				Filesystem: fs,
-				TotalGB:    psize / bytesPerGB,
-				FreeGB:     -1,
-			})
-		}
+		vols = appendDiskVolumes(vols, plistArray(dm, "Partitions"), false)
+		vols = appendDiskVolumes(vols, plistArray(dm, "APFSVolumes"), true)
 		if content == "Apple_APFS" {
 			// Synthesized APFS container disk (e.g. /dev/disk3): its
-			// partitions are the real volumes of the physical disk.
-			uuid := plistString(dm, "APFSContainerUUID")
-			if uuid == "" {
-				uuid = plistString(dm, "ContainerUUID")
-			}
-			containers = append(containers, containerInfo{volumes: vols, uuid: uuid, size: size})
+			// volumes are the real volumes of the physical disk.
+			containers = append(containers, containerInfo{device: "/dev/" + devID, name: plistString(dm, "MediaName"), content: content, volumes: vols, uuid: uuid, size: size, stores: stores})
 			continue
 		}
 		// Physical disk. Remember its APFS partition's UUID/size so
@@ -504,40 +632,119 @@ func parseDiskutilList(data []byte) ([]macDisk, error) {
 	}
 
 	// Attach each container's volumes to its physical disk.
-	// Match order: (1) APFS container UUID, (2) equal size between the
-	// container and the physical disk's APFS partition, (3) exactly one
-	// container and exactly one physical disk in the whole listing.
-	// Rule (3) is deliberately narrow: Apple Silicon Macs also expose a
-	// second synthesized disk (disk1, the booted system snapshot) that
-	// must NOT be merged into the SSD's volumes, so an unmatched
-	// container is skipped rather than attached speculatively.
-	for _, c := range containers {
-		attached := false
+	// Match order: (0) APFS physical store — the container's
+	// APFSPhysicalStores name the physical partition that hosts it
+	// (disk3 -> disk0s2), the direct link; (1) APFS container UUID;
+	// (2) equal size between the container and the physical disk's
+	// APFS partition; (3) exactly one container and exactly one
+	// physical disk in the whole listing. Rule (3) is deliberately
+	// narrow: Apple Silicon Macs also expose a second synthesized
+	// disk (disk1, the booted system snapshot / Recovery container)
+	// that must NOT be merged into the SSD's volumes, so an
+	// unmatched container is skipped rather than attached
+	// speculatively — unless no physical disk exists at all (below).
+	for ci := range containers {
+		c := &containers[ci]
 		for i := range physical {
-			if c.uuid != "" && physical[i].containerUUID != "" && c.uuid == physical[i].containerUUID {
-				physical[i].disk.Volumes = append(physical[i].disk.Volumes, c.volumes...)
-				attached = true
+			for _, store := range c.stores {
+				if darwinPhysicalDisk("/dev/"+store) == physical[i].disk.Device {
+					physical[i].disk.Volumes = append(physical[i].disk.Volumes, c.volumes...)
+					c.attached = true
+					break
+				}
+			}
+			if c.attached {
 				break
 			}
 		}
-		if !attached {
+		if !c.attached {
 			for i := range physical {
-				if c.size > 0 && physical[i].containerSize != 0 && physical[i].containerSize == c.size {
+				if c.uuid != "" && physical[i].containerUUID != "" && c.uuid == physical[i].containerUUID {
 					physical[i].disk.Volumes = append(physical[i].disk.Volumes, c.volumes...)
-					attached = true
+					c.attached = true
 					break
 				}
 			}
 		}
-		if !attached && len(containers) == 1 && len(physical) == 1 {
-			physical[0].disk.Volumes = append(physical[0].disk.Volumes, c.volumes...)
-			attached = true
+		if !c.attached {
+			for i := range physical {
+				if c.size > 0 && physical[i].containerSize != 0 && physical[i].containerSize == c.size {
+					physical[i].disk.Volumes = append(physical[i].disk.Volumes, c.volumes...)
+					c.attached = true
+					break
+				}
+			}
 		}
-		if !attached {
-			// No physical disk matched (e.g. the snapshot container
-			// disk1 on Apple Silicon): skip it rather than inventing
-			// a second disk or duplicating volumes onto the SSD.
-			log.Printf("diskutil: APFS container with no matching physical disk skipped (not a physical disk)")
+		if !c.attached && len(containers) == 1 && len(physical) == 1 {
+			physical[0].disk.Volumes = append(physical[0].disk.Volumes, c.volumes...)
+			c.attached = true
+		}
+		// An unmatched container is logged as skipped AFTER the
+		// promotion decision below, so a promoted container is not
+		// first reported as skipped.
+	}
+
+	// No physical disk at all in the listing (the real Mac's
+	// 2026-11-21 snapshot: disk0 absent, only the synthesized
+	// containers and disk images present). Returning zero disks here
+	// makes darwinDiskInfo fall back to `df`, which cannot tell a
+	// container from a disk image and reports one "disk" per df
+	// device (disk1/disk2/disk3/disk4) — the Bug 4 symptom. Promote
+	// exactly one container instead: the booted-system container
+	// (the one whose volumes include the "/" mount), else the
+	// largest container. The Recovery/snapshot container is never
+	// promoted by the "/" rule (it has no "/" mount) and loses the
+	// size rule to the main container by an order of magnitude;
+	// disk images were excluded before containers were collected.
+	// This runs ONLY when no physical disk was parsed, so a present
+	// disk0 keeps the behaviour above (snapshot container skipped).
+	if len(physical) == 0 {
+		best := -1
+		for i := range containers {
+			if containers[i].attached {
+				continue
+			}
+			for _, v := range containers[i].volumes {
+				if v.Mount == "/" {
+					best = i
+					break
+				}
+			}
+			if best != -1 {
+				break
+			}
+		}
+		if best == -1 {
+			for i := range containers {
+				if containers[i].attached {
+					continue
+				}
+				if best == -1 || containers[i].size > containers[best].size {
+					best = i
+				}
+			}
+		}
+		if best != -1 {
+			c := containers[best]
+			log.Printf("diskutil: no physical disk in listing; promoting APFS container %s as the disk (%d volumes)", c.device, len(c.volumes))
+			physical = append(physical, physInfo{disk: macDisk{
+				Device:     c.device,
+				Name:       c.name,
+				TotalGB:    c.size / bytesPerGB,
+				FreeGB:     -1,
+				Filesystem: c.content,
+				Volumes:    c.volumes,
+			}})
+			containers[best].attached = true
+		}
+	}
+
+	// Any container still unmatched now is genuinely skipped — never
+	// a second disk, never volumes duplicated onto the SSD (e.g. the
+	// snapshot/Recovery container disk1 on Apple Silicon).
+	for i := range containers {
+		if !containers[i].attached {
+			log.Printf("diskutil: APFS container %s with no matching physical disk skipped (not a physical disk)", containers[i].device)
 		}
 	}
 	out := make([]macDisk, 0, len(physical))
@@ -662,7 +869,12 @@ func darwinDiskInfo(errors *[]string) []map[string]any {
 		// Fallback: df, grouped by physical disk (disk3s1 -> disk3).
 		// Note the fallback cannot tell a disk image from a real disk
 		// from df alone, so it may still list an attached image as a
-		// disk — the diskutil path above is the accurate one.
+		// disk — the diskutil path above is the accurate one. This
+		// fallback is also what manufactured the Bug 4 symptom (four
+		// "disks" for one SSD) when diskutil parsed zero disks, so
+		// it is logged and recorded — never silent.
+		log.Printf("diskutil: no physical disks parsed, falling back to df -k (df cannot distinguish disk images from real disks)")
+		*errors = append(*errors, "disks: diskutil returned no physical disks; fell back to df -k (disk images may appear as disks)")
 		if out, err := runCmd(10*time.Second, "df", "-k"); err == nil {
 			disks = groupDFByDisk(parseDFDarwin(out))
 		} else if err != nil {

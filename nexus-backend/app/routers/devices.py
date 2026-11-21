@@ -164,12 +164,24 @@ def enroll_device(req: EnrollRequest, db: Session = Depends(get_db)):
     db.commit()
     return {"status": "enrolled", "device_id": device.device_id, "device_token": device_token}
 
+class HeartbeatRequest(BaseModel):
+    agent_version: Optional[str] = None
+
+
 @router.post("/heartbeat")
-def heartbeat(device: Device = Depends(get_current_device), db: Session = Depends(get_db)):
+def heartbeat(body: Optional[HeartbeatRequest] = None,
+              device: Device = Depends(get_current_device), db: Session = Depends(get_db)):
     """Heartbeat from an enrolled agent. Authenticated by the device's
     own credential (X-Device-Token) — an enrollment token or a JWT
-    does not authenticate here."""
+    does not authenticate here.
+
+    The body is optional: older agents heartbeat with no body at all,
+    and that keeps working. When the agent sends {"agent_version":
+    "..."} the device row is stamped with it, so the Endpoints table
+    shows the running agent version between inventory uploads."""
     device.last_checkin_at = datetime.utcnow()
+    if body is not None and body.agent_version:
+        device.agent_version = body.agent_version
     db.commit()
     return {"status": "ok"}
 
@@ -179,6 +191,7 @@ class InventoryUpload(BaseModel):
     os: dict = {}
     software: list = []
     collected_at: Optional[datetime] = None
+    agent_version: Optional[str] = None
 
 
 @router.post("/{device_id}/inventory")
@@ -205,8 +218,24 @@ def upload_inventory(device_id: str, req: InventoryUpload,
     )
     db.add(snapshot)
     device.last_checkin_at = datetime.utcnow()
+    # Stamp the device row from the fresh snapshot, so the Endpoints
+    # table and device stats read the latest inventory instead of the
+    # enrollment-time values. Only overwrite agent_version when the
+    # payload carries a non-empty one — older agents send none.
+    if req.agent_version:
+        device.agent_version = req.agent_version
     attrs = dict(device.attributes or {})
-    attrs["last_inventory_at"] = (req.collected_at or datetime.utcnow()).isoformat()
+    collected = req.collected_at or datetime.utcnow()
+    attrs["last_inventory_at"] = collected.isoformat()
+    # NOTE: attributes["collected"] is intentionally NOT refreshed here:
+    # it is the enrollment/first-seen timestamp and the IT Ops home
+    # buckets the enrollment chart on it. last_inventory_at above is
+    # the freshness marker for the latest snapshot.
+    attrs["os"] = req.os
+    attrs["software"] = len(req.software or [])
+    disks = req.hardware.get("disks") if isinstance(req.hardware, dict) else None
+    if isinstance(disks, list):
+        attrs["disks"] = len(disks)
     device.attributes = attrs
     db.commit()
     db.refresh(snapshot)
@@ -234,6 +263,7 @@ def latest_inventory(device_id: str, db: Session = Depends(get_db), current_user
         "id": str(snapshot.id),
         "device_id": device.device_id,
         "hostname": device.hostname,
+        "agent_version": device.agent_version,
         "tenant_id": str(snapshot.tenant_id),
         "hardware": snapshot.hardware,
         "os": snapshot.os,

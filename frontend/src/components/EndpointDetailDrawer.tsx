@@ -6,10 +6,10 @@
 //
 // Built against Miah's real Mac first (device_id
 // darwin-ac913e0958751651, hostname Jamiahs-MacBook-Air-2.local):
-// its 13-item inventory snapshot, Apple M5 / 10 cores / 16 GB RAM, and
-// its honest gaps — macOS version null, every software entry vendor
-// "Apple" with a blank version, 13 disk entries for one SSD. Where the
-// agent reports nothing, this view says so; it never invents a value.
+// its 78-item inventory snapshot (collected 2026-11-21T15:54:55 UTC),
+// Apple M5 / 10 cores / 16 GB RAM, macOS 26.6.2 (build 25G83), and
+// its honest gap — 4 disk entries for one SSD. Where the agent
+// reports nothing, this view says so; it never invents a value.
 //
 // Endpoints used (all existing — no backend changes):
 //   GET  /api/v1/devices/                              (deviceId fallback)
@@ -40,6 +40,7 @@ import { Icon } from './Icon'
 import { StatusBadge, SeverityBadge } from './StatusBadge'
 import { EmptyState } from './EmptyState'
 import { SendConfigurationModal } from './SendConfigurationModal'
+import { parseBackendDate, formatLocalDateTime, relativeAge } from '../time'
 
 export type EndpointDeviceRecord = {
   id: string
@@ -81,8 +82,11 @@ type Connectivity = 'online' | 'stale' | 'offline' | 'never'
 
 function connectivityOf(lastCheckin: string | null | undefined): { state: Connectivity; at: Date | null } {
   if (!lastCheckin) return { state: 'never', at: null }
-  const at = new Date(lastCheckin)
-  if (Number.isNaN(at.getTime())) return { state: 'never', at: null }
+  // parseBackendDate: backend datetimes are naive UTC — parse them
+  // as UTC, or a 10-minute-old check-in computes as 5h10m old here
+  // (America/Detroit) and reads "Stale" instead of "Online".
+  const at = parseBackendDate(lastCheckin)
+  if (!at) return { state: 'never', at: null }
   const age = Date.now() - at.getTime()
   if (age < 0) return { state: 'online', at } // clock skew: treat as just checked in
   if (age <= ONLINE_WINDOW_MS) return { state: 'online', at }
@@ -97,25 +101,9 @@ const CONNECTIVITY_META: Record<Connectivity, { label: string; color: string; ba
   never: { label: 'Never checked in', color: '#65748A', background: '#F4F7FA', blurb: 'No check-in recorded for this device.' },
 }
 
-function formatUtc(iso: string | null | undefined): string {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return iso
-  return `${d.toLocaleString('en-US', { timeZone: 'UTC', dateStyle: 'medium', timeStyle: 'short' })} UTC`
-}
-
-function relativeAge(iso: string | null | undefined): string {
-  if (!iso) return ''
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return ''
-  const mins = Math.max(0, Math.round((Date.now() - d.getTime()) / 60000))
-  if (mins < 1) return 'just now'
-  if (mins < 60) return `${mins} min ago`
-  const hours = Math.floor(mins / 60)
-  if (hours < 24) return `${hours}h ${mins % 60}m ago`
-  const days = Math.floor(hours / 24)
-  return `${days}d ${hours % 24}h ago`
-}
+// formatLocalDateTime / relativeAge live in ../time.ts (shared with
+// the other device/inventory views) — backend datetimes are naive
+// UTC and must be parsed as UTC before rendering in local time.
 
 function formatBytesGb(totalMb: number | null | undefined): string {
   if (totalMb == null || Number.isNaN(Number(totalMb))) return 'Not reported'
@@ -291,9 +279,9 @@ export function EndpointDetailDrawer({
   const mac = firstMac(hardware)
   const isDemo = device?.is_demo === true
   const versionsMissing = software.length > 0 && software.every((s: any) => !String(s?.version ?? '').trim())
-  // The Mac's snapshot reports 13 volume entries for a single SSD
-  // (APFS volumes / snapshots share one physical disk). Say so when
-  // the entries all share the same size signature.
+  // The Mac's snapshot reports 4 disk entries for a single SSD
+  // (APFS volumes share one physical disk). Say so when the
+  // entries all share the same size signature.
   const diskSizes = new Set(disks.map((d: any) => `${d?.total_gb ?? '?'}`))
   const disksInflated = disks.length > 1 && diskSizes.size <= 2
 
@@ -428,7 +416,7 @@ export function EndpointDetailDrawer({
                 <div className="mt-2">
                   <Row
                     label="Last check-in"
-                    value={conn.at ? formatUtc(device.last_checkin_at) : 'Never'}
+                    value={conn.at ? formatLocalDateTime(device.last_checkin_at) : 'Never'}
                     note={conn.at ? relativeAge(device.last_checkin_at) : undefined}
                   />
                   <Row
@@ -458,7 +446,7 @@ export function EndpointDetailDrawer({
                       note={
                         os?.version
                           ? `Version ${os.version}${os?.arch ? ` · ${os.arch}` : ''}`
-                          : 'Version not reported — the agent does not populate the macOS version, so none is shown rather than guessed.'
+                          : 'Version not reported — the agent did not populate the OS version in this snapshot, so none is shown rather than guessed.'
                       }
                     />
                     {os?.platform && <Row label="Platform" value={`${os.platform}${os?.arch ? ` · ${os.arch}` : ''}`} />}
@@ -490,7 +478,7 @@ export function EndpointDetailDrawer({
                       </details>
                     )}
                     <p className="mt-2 text-xs text-null-muted dark:text-[#8AA0B8]">
-                      Snapshot collected {formatUtc(inventory.collected_at)}
+                      Snapshot collected {formatLocalDateTime(inventory.collected_at)}
                       {inventory?.hostname ? ` · ${inventory.hostname}` : ''}
                       {hardware?.current_user ? ` · signed in as ${hardware.current_user}` : ''}.
                     </p>
@@ -529,7 +517,7 @@ export function EndpointDetailDrawer({
                         </p>
                       )}
                       <p className="mt-1 text-xs text-null-muted dark:text-[#8AA0B8]">
-                        From the latest inventory snapshot ({formatUtc(inventory.collected_at)}).
+                        From the latest inventory snapshot ({formatLocalDateTime(inventory.collected_at)}).
                       </p>
                     </>
                   )
@@ -586,7 +574,7 @@ export function EndpointDetailDrawer({
                                 return (
                                   <li key={s.id} className="text-xs text-null-muted dark:text-[#8AA0B8]">
                                     <span className="flex flex-wrap items-center gap-2">
-                                      <span>Sent {formatUtc(s.created_at)}</span>
+                                      <span>Sent {formatLocalDateTime(s.created_at)}</span>
                                       {cmd ? (
                                         <>
                                           <StatusBadge value={cmd.status} size="sm" />
@@ -703,8 +691,8 @@ export function EndpointDetailDrawer({
                           </span>
                           <span className="mt-1 block break-all font-mono text-xs">{c.command}</span>
                           <span className="mt-0.5 block text-xs text-null-muted dark:text-[#8AA0B8]">
-                            {formatUtc(c.created_at)}
-                            {c.completed_at ? ` · completed ${formatUtc(c.completed_at)}` : ''}
+                            {formatLocalDateTime(c.created_at)}
+                            {c.completed_at ? ` · completed ${formatLocalDateTime(c.completed_at)}` : ''}
                           </span>
                           {c.result ? (
                             <details className="mt-1">
@@ -787,7 +775,7 @@ export function EndpointDetailDrawer({
               <div className="rounded border border-null-line p-3 text-xs text-null-muted dark:border-white/10 dark:text-[#8AA0B8]">
                 <p>Device UUID: <span className="font-mono">{device.id}</span></p>
                 <p className="mt-1">Stable device id: <span className="font-mono">{device.device_id}</span></p>
-                {device.created_at && <p className="mt-1">First seen: {formatUtc(device.created_at)}</p>}
+                {device.created_at && <p className="mt-1">First seen: {formatLocalDateTime(device.created_at)}</p>}
                 <p className="mt-1">Record type: {isDemo ? 'Sample (demo) record' : 'Live record — real enrolled device'}.</p>
               </div>
             </>

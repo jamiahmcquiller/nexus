@@ -462,6 +462,307 @@ func TestParseDiskutilList(t *testing.T) {
 	}
 }
 
+// fixtureDiskutilPlistAPFSVolumes models a physical disk whose
+// container lists its volumes under "APFSVolumes" (the real
+// `diskutil list -plist` schema) and links back via
+// "APFSPhysicalStores" — with NO APFSContainerUUID key anywhere and
+// NO WholeDisk key on the container. The parser must still attach
+// the container's volumes to disk0. (APFSContainerUUID / WholeDisk
+// are the v0.3.2 fixture's assumed keys; the AWS ec2-macos-utils
+// DiskPart struct mirroring `diskutil list -plist` carries neither.)
+func fixtureDiskutilPlistAPFSVolumes() string {
+	return `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+	<key>AllDisksAndPartitions</key>
+	<array>
+		<dict>
+			<key>DeviceIdentifier</key>
+			<string>disk0</string>
+			<key>Size</key>
+			<integer>494000000000</integer>
+			<key>Content</key>
+			<string>GUID_partition_scheme</string>
+			<key>WholeDisk</key>
+			<true/>
+			<key>MediaName</key>
+			<string>APPLE SSD AP0512Z Media</string>
+			<key>Partitions</key>
+			<array>
+				<dict>
+					<key>DeviceIdentifier</key>
+					<string>disk0s1</string>
+					<key>Size</key>
+					<integer>314600000</integer>
+					<key>Content</key>
+					<string>Apple_APFS_ISC</string>
+				</dict>
+				<dict>
+					<key>DeviceIdentifier</key>
+					<string>disk0s2</string>
+					<key>Size</key>
+					<integer>493685000000</integer>
+					<key>Content</key>
+					<string>Apple_APFS</string>
+				</dict>
+			</array>
+		</dict>
+		<dict>
+			<key>DeviceIdentifier</key>
+			<string>disk3</string>
+			<key>Size</key>
+			<integer>493685000000</integer>
+			<key>Content</key>
+			<string>Apple_APFS</string>
+			<key>APFSPhysicalStores</key>
+			<array>
+				<dict>
+					<key>APFSPhysicalStore</key>
+					<string>disk0s2</string>
+				</dict>
+			</array>
+			<key>APFSVolumes</key>
+			<array>
+				<dict>
+					<key>DeviceIdentifier</key>
+					<string>disk3s1</string>
+					<key>Size</key>
+					<integer>493685000000</integer>
+					<key>VolumeName</key>
+					<string>Macintosh HD</string>
+					<key>MountPoint</key>
+					<string>/</string>
+				</dict>
+				<dict>
+					<key>DeviceIdentifier</key>
+					<string>disk3s5</string>
+					<key>Size</key>
+					<integer>493685000000</integer>
+					<key>VolumeName</key>
+					<string>Macintosh HD - Data</string>
+					<key>MountPoint</key>
+					<string>/System/Volumes/Data</string>
+				</dict>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>`
+}
+
+func TestParseDiskutilListAPFSVolumes(t *testing.T) {
+	disks, err := parseDiskutilList([]byte(fixtureDiskutilPlistAPFSVolumes()))
+	if err != nil {
+		t.Fatalf("parseDiskutilList: %v", err)
+	}
+	if len(disks) != 1 {
+		t.Fatalf("got %d disks, want 1: %+v", len(disks), disks)
+	}
+	d := disks[0]
+	if d.Device != "/dev/disk0" {
+		t.Fatalf("disk device = %q, want /dev/disk0", d.Device)
+	}
+	if d.TotalGB != 460 {
+		t.Fatalf("disk total = %d GB, want 460", d.TotalGB)
+	}
+	// The container's APFSVolumes, attached via APFSPhysicalStores
+	// (disk3 -> disk0s2) with no UUID and no WholeDisk key involved.
+	if len(d.Volumes) != 2 {
+		t.Fatalf("got %d volumes, want 2: %+v", len(d.Volumes), d.Volumes)
+	}
+	byDev := map[string]macVolume{}
+	for _, v := range d.Volumes {
+		byDev[v.Device] = v
+	}
+	hd, ok := byDev["/dev/disk3s1"]
+	if !ok || hd.Name != "Macintosh HD" || hd.Mount != "/" || hd.Filesystem != "apfs" {
+		t.Fatalf("Macintosh HD volume wrong: %+v", hd)
+	}
+	// 493,685,000,000 bytes truncates to 459 GiB per volume.
+	if hd.TotalGB != 459 {
+		t.Fatalf("Macintosh HD total = %d GB, want 459", hd.TotalGB)
+	}
+	data, ok := byDev["/dev/disk3s5"]
+	if !ok || data.Name != "Macintosh HD - Data" || data.Mount != "/System/Volumes/Data" || data.Filesystem != "apfs" {
+		t.Fatalf("Data volume wrong: %+v", data)
+	}
+}
+
+// fixtureDiskutilPlistRealSnapshot models the REAL Mac's disk layout
+// as observed in the 2026-11-21 snapshot (hardware.disks, device
+// darwin-ac913e0958751651) — which v0.3.2 reported as FOUR disks
+// (disk1/disk2/disk3/disk4), the shape of the df fallback:
+//
+//   - disk1: 3 APFS volumes, 0 GB each in df (Recovery/snapshot
+//     container; the 5,368,709,120-byte container size is the
+//     documented Apple Silicon Recovery-container size — the
+//     snapshot only shows its df-truncated 0 GB).
+//   - disk2: 1 volume, 4 GB — a disk image (Virtual).
+//   - disk3: 6 APFS volumes, 460 GB each — the real SSD's container.
+//     Volume sizes equal the container size (APFS volumes share the
+//     pool; df showed every volume at the full 460 GB). Mounts are
+//     the ones observed in the Mac's df output ("/" on the system
+//     volume — df reports the sealed-system snapshot as disk3s1s1,
+//     the snapshot of disk3s1 — plus /System/Volumes/Data and
+//     /System/Volumes/VM). Volume names are the standard macOS ones.
+//   - disk4: 1 volume, 1 GB — a disk image (Apple_DiskImage).
+//
+// disk0 (the actual physical internal disk) is ABSENT from the
+// listing — that is the point: the parser must still return ONE
+// disk, the disk3 container promoted as the disk, with disk1/disk2/
+// disk4 excluded. Keys follow the documented `diskutil list -plist`
+// schema (APFSVolumes, APFSPhysicalStores); WholeDisk and
+// APFSContainerUUID are deliberately absent, as in that schema.
+func fixtureDiskutilPlistRealSnapshot() string {
+	vol := func(id string, size int64, name, mount string) string {
+		s := fmt.Sprintf("\t\t\t\t<dict>\n\t\t\t\t\t<key>DeviceIdentifier</key>\n\t\t\t\t\t<string>%s</string>\n\t\t\t\t\t<key>Size</key>\n\t\t\t\t\t<integer>%d</integer>\n", id, size)
+		if name != "" {
+			s += fmt.Sprintf("\t\t\t\t\t<key>VolumeName</key>\n\t\t\t\t\t<string>%s</string>\n", name)
+		}
+		if mount != "" {
+			s += fmt.Sprintf("\t\t\t\t\t<key>MountPoint</key>\n\t\t\t\t\t<string>%s</string>\n", mount)
+		}
+		return s + "\t\t\t\t</dict>\n"
+	}
+	container := func(id string, size int64, store, vols string) string {
+		return fmt.Sprintf("\t\t<dict>\n\t\t\t<key>DeviceIdentifier</key>\n\t\t\t<string>%s</string>\n\t\t\t<key>Size</key>\n\t\t\t<integer>%d</integer>\n\t\t\t<key>Content</key>\n\t\t\t<string>Apple_APFS</string>\n\t\t\t<key>APFSPhysicalStores</key>\n\t\t\t<array>\n\t\t\t\t<dict>\n\t\t\t\t\t<key>APFSPhysicalStore</key>\n\t\t\t\t\t<string>%s</string>\n\t\t\t\t</dict>\n\t\t\t</array>\n\t\t\t<key>APFSVolumes</key>\n\t\t\t<array>\n%s\t\t\t</array>\n\t\t</dict>\n", id, size, store, vols)
+	}
+	disk1vols := vol("disk1s1", 1073741824, "", "") +
+		vol("disk1s2", 1073741824, "", "") +
+		vol("disk1s3", 1073741824, "", "")
+	disk3vols := vol("disk3s1", 494000000000, "Macintosh HD", "/") +
+		vol("disk3s2", 494000000000, "Preboot", "") +
+		vol("disk3s3", 494000000000, "Recovery", "") +
+		vol("disk3s4", 494000000000, "Update", "") +
+		vol("disk3s5", 494000000000, "Macintosh HD - Data", "/System/Volumes/Data") +
+		vol("disk3s6", 494000000000, "VM", "/System/Volumes/VM")
+	return `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+	<key>AllDisksAndPartitions</key>
+	<array>
+` + container("disk1", 5368709120, "disk0s3", disk1vols) +
+		`		<dict>
+			<key>DeviceIdentifier</key>
+			<string>disk2</string>
+			<key>Size</key>
+			<integer>4294967296</integer>
+			<key>Content</key>
+			<string>GUID_partition_scheme</string>
+			<key>Virtual</key>
+			<true/>
+			<key>Partitions</key>
+			<array>
+				<dict>
+					<key>DeviceIdentifier</key>
+					<string>disk2s1</string>
+					<key>Size</key>
+					<integer>4294967296</integer>
+					<key>Content</key>
+					<string>Apple_HFS</string>
+					<key>VolumeName</key>
+					<string>Image</string>
+					<key>MountPoint</key>
+					<string>/Volumes/Image</string>
+				</dict>
+			</array>
+		</dict>
+` + container("disk3", 494000000000, "disk0s2", disk3vols) +
+		`		<dict>
+			<key>DeviceIdentifier</key>
+			<string>disk4</string>
+			<key>Size</key>
+			<integer>1073741824</integer>
+			<key>Content</key>
+			<string>Apple_DiskImage</string>
+			<key>VirtualOrPhysical</key>
+			<string>Virtual</string>
+			<key>Partitions</key>
+			<array>
+				<dict>
+					<key>DeviceIdentifier</key>
+					<string>disk4s1</string>
+					<key>Size</key>
+					<integer>1073741824</integer>
+					<key>Content</key>
+					<string>Apple_HFS</string>
+					<key>VolumeName</key>
+					<string>Other</string>
+					<key>MountPoint</key>
+					<string>/Volumes/Other</string>
+				</dict>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>`
+}
+
+func TestParseDiskutilListRealSnapshot(t *testing.T) {
+	disks, err := parseDiskutilList([]byte(fixtureDiskutilPlistRealSnapshot()))
+	if err != nil {
+		t.Fatalf("parseDiskutilList: %v", err)
+	}
+	// Bug 4: the real snapshot came back as 4 disks (disk1/disk2/
+	// disk3/disk4). After the fix: exactly 1 disk — the disk3
+	// container promoted as the disk, since disk0 is absent from
+	// the listing. disk1 (Recovery/snapshot container) and disk2/
+	// disk4 (disk images) must not appear, attached or otherwise.
+	if len(disks) != 1 {
+		t.Fatalf("got %d disks, want 1: %+v", len(disks), disks)
+	}
+	d := disks[0]
+	if d.Device != "/dev/disk3" {
+		t.Fatalf("disk device = %q, want /dev/disk3 (the promoted container)", d.Device)
+	}
+	if d.TotalGB != 460 {
+		t.Fatalf("disk total = %d GB, want 460", d.TotalGB)
+	}
+	if d.Filesystem != "Apple_APFS" {
+		t.Fatalf("disk filesystem = %q, want Apple_APFS (the container's content)", d.Filesystem)
+	}
+	if len(d.Volumes) != 6 {
+		t.Fatalf("got %d volumes, want 6: %+v", len(d.Volumes), d.Volumes)
+	}
+	byDev := map[string]macVolume{}
+	for _, v := range d.Volumes {
+		byDev[v.Device] = v
+		if v.Filesystem != "apfs" {
+			t.Errorf("volume %s filesystem = %q, want apfs", v.Device, v.Filesystem)
+		}
+		if v.TotalGB != 460 {
+			t.Errorf("volume %s total = %d GB, want 460", v.Device, v.TotalGB)
+		}
+	}
+	hd, ok := byDev["/dev/disk3s1"]
+	if !ok || hd.Name != "Macintosh HD" || hd.Mount != "/" {
+		t.Fatalf("Macintosh HD volume wrong: %+v", hd)
+	}
+	data, ok := byDev["/dev/disk3s5"]
+	if !ok || data.Name != "Macintosh HD - Data" || data.Mount != "/System/Volumes/Data" {
+		t.Fatalf("Data volume wrong: %+v", data)
+	}
+	// Nothing from the Recovery container or the disk images.
+	for _, dev := range []string{"/dev/disk1", "/dev/disk1s1", "/dev/disk1s2", "/dev/disk1s3", "/dev/disk2", "/dev/disk2s1", "/dev/disk4", "/dev/disk4s1"} {
+		if _, ok := byDev[dev]; ok {
+			t.Errorf("volume %s must not appear under the disk", dev)
+		}
+	}
+}
+
+func TestIsWholeDiskDevice(t *testing.T) {
+	cases := map[string]bool{
+		"disk0": true, "disk3": true, "disk10": true,
+		"disk0s1": false, "disk3s1": false, "disk3s1s1": false,
+		"disk": false, "": false, "sda": false,
+	}
+	for in, want := range cases {
+		if got := isWholeDiskDevice(in); got != want {
+			t.Errorf("isWholeDiskDevice(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
 func TestDarwinPhysicalDisk(t *testing.T) {
 	cases := map[string]string{
 		"/dev/disk0": "/dev/disk0", "/dev/disk3s1": "/dev/disk3",

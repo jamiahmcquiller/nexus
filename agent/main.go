@@ -1,4 +1,4 @@
-// NEXUS Endpoint Agent v0.3.2
+// NEXUS Endpoint Agent v0.3.3
 //
 // Endpoint agent: enrolls with the NEXUS backend using a one-time
 // enrollment token, receives its own per-device credential, and then
@@ -52,7 +52,7 @@ import (
 	"time"
 )
 
-const version = "0.3.2"
+const version = "0.3.3"
 
 const defaultServer = "http://localhost:8000"
 
@@ -556,10 +556,11 @@ func (c *client) enroll(hostname, deviceID string, inv inventory) (string, error
 
 func (c *client) uploadInventory(deviceID string, inv inventory) error {
 	payload := map[string]any{
-		"hardware":     inv.Hardware,
-		"os":           inv.OS,
-		"software":     inv.Software,
-		"collected_at": time.Now().UTC().Format(time.RFC3339),
+		"hardware":      inv.Hardware,
+		"os":            inv.OS,
+		"software":      inv.Software,
+		"collected_at":  time.Now().UTC().Format(time.RFC3339),
+		"agent_version": version,
 	}
 	status, body, err := c.postDevice("/api/v1/devices/"+deviceID+"/inventory", payload)
 	if err != nil {
@@ -572,7 +573,10 @@ func (c *client) uploadInventory(deviceID string, inv inventory) error {
 }
 
 func (c *client) heartbeat() error {
-	status, body, err := c.postDevice("/api/v1/devices/heartbeat", map[string]any{})
+	// v0.3.3: heartbeat carries agent_version so the backend can
+	// stamp the device row between inventory uploads. The backend
+	// accepts a missing body too, for older agents.
+	status, body, err := c.postDevice("/api/v1/devices/heartbeat", map[string]any{"agent_version": version})
 	if err != nil {
 		return err
 	}

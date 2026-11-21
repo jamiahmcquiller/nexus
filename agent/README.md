@@ -1,4 +1,4 @@
-# NEXUS Agent v0.3.2
+# NEXUS Agent v0.3.3
 
 Go-based endpoint agent for Windows, macOS, and Linux. One binary, no
 installer, no dependencies.
@@ -27,6 +27,23 @@ installer, no dependencies.
   their disk, disk images and the snapshot container are excluded).
   It never uploads file contents, browsing history, keystrokes, or
   personal files.
+
+## What's new in v0.3.3
+
+- **Device record stays fresh** — the agent now sends its version with
+  every inventory upload and heartbeat, and the backend stamps the
+  device row from it (agent version, OS, software/disk counts), so the
+  Endpoints table shows the latest inventory instead of the
+  enrollment-time values.
+- **macOS disk de-dup fixed** — the v0.3.2 parser read container
+  volumes from the wrong plist key (`Partitions` instead of
+  `APFSVolumes`), never saw the `APFSPhysicalStores` link, and
+  required a `WholeDisk` key the schema doesn't carry — so it
+  returned zero disks on the real Mac and the `df` fallback
+  manufactured four bogus entries. All three are fixed, containers
+  attach via their physical store, and the `df` fallback now logs a
+  warning when it triggers. One debug log line per raw diskutil
+  entry is emitted before de-dup.
 
 ## What's new in v0.3.2
 
