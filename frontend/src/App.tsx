@@ -96,8 +96,9 @@ function App() {
       setToken(res.data.access_token)
       localStorage.setItem('nexus_token', res.data.access_token)
       setError('')
-    } catch {
-      setError('Login failed')
+    } catch (err: any) {
+      const msg = err.response?.data?.detail || err.message || 'Login failed'
+      setError(typeof msg === 'string' ? msg : JSON.stringify(msg))
     }
   }
 
@@ -111,8 +112,9 @@ function App() {
       setToken(res.data.access_token)
       localStorage.setItem('nexus_token', res.data.access_token)
       setError('')
-    } catch {
-      setError('Registration failed')
+    } catch (err: any) {
+      const msg = err.response?.data?.detail || err.message || 'Registration failed'
+      setError(typeof msg === 'string' ? msg : JSON.stringify(msg))
     }
   }
 
