@@ -3,12 +3,24 @@ import axios from 'axios'
 
 const API = (() => {
   if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL
-  if (typeof window !== 'undefined' && window.location.hostname.includes('app.github.dev')) {
-    // Codespaces: frontend is on -5173, backend is on -8000
-    return window.location.origin.replace('-5173', '-8000')
+  if (typeof window !== 'undefined') {
+    const host = window.location.hostname
+    if (host.includes('app.github.dev')) {
+      // Codespaces port forwarding: replace the frontend port with 8000
+      const origin = window.location.origin
+      const backend = origin.replace(/-5173\.app\.github\.dev/, '-8000.app.github.dev')
+      if (backend !== origin) return backend
+      // Fallback: try replacing any port number
+      return origin.replace(/-\d+\.app\.github\.dev/, '-8000.app.github.dev')
+    }
   }
   return 'http://localhost:8000'
 })()
+
+// Debug helper — visible in console
+if (typeof window !== 'undefined') {
+  console.log('[NEXUS] API base URL:', API)
+}
 
 const MODULES = [
   { id: 'dashboard', label: 'Dashboard' },
@@ -98,7 +110,7 @@ function App() {
       setError('')
     } catch (err: any) {
       const msg = err.response?.data?.detail || err.message || 'Login failed'
-      setError(typeof msg === 'string' ? msg : JSON.stringify(msg))
+      setError(`${typeof msg === 'string' ? msg : JSON.stringify(msg)} (API: ${API})`)
     }
   }
 
@@ -114,7 +126,7 @@ function App() {
       setError('')
     } catch (err: any) {
       const msg = err.response?.data?.detail || err.message || 'Registration failed'
-      setError(typeof msg === 'string' ? msg : JSON.stringify(msg))
+      setError(`${typeof msg === 'string' ? msg : JSON.stringify(msg)} (API: ${API})`)
     }
   }
 
