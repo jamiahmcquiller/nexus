@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "NEXUS backend API"
 authors = ["Jamiah McQuiller"]
 readme = "README.md"
+packages = [{include = "app"}]
 
 [tool.poetry.dependencies]
 python = "^3.12"
