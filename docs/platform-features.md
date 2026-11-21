@@ -79,3 +79,10 @@ or `docker compose -f infra/docker-compose.yml up -d`.
 - Shared CRUD: `nexus-backend/app/routers/_crud.py`
 - Domain routers: `nexus-backend/app/routers/{patching,vulnops,edr,malware,browser,appcontrol,dlp,access,assets,distribution,dex,remote,imaging,configmgmt,mdm,encryption,servers,reporting}.py`
 - Console: `frontend/src/App.tsx` (all modules + sub-sections)
+- Workspaces & theme (v0.4.0): `frontend/src/workspaces.ts`,
+  `frontend/src/theme.ts`, `docs/workspaces-and-theme.md` — two
+  administrator workspaces (IT Operations, Security Operations)
+  with separate navigation and home dashboards, single-sign-on
+  switching, role-based authorization
+  (`GET /api/v1/auth/workspaces`), and the Midnight Navy / Teal
+  brand system (light/dark mode, density) applied to every screen

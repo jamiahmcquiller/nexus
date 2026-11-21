@@ -104,6 +104,7 @@ One platform covering the full Endpoint Central-style feature set — see
 - [x] Frontend console shell
 - [x] Platform models, APIs, and console for all 17 feature areas (v0.2.0)
 - [x] Background scheduler / worker for deployments, hunts, and remediation workflows (v0.3.0 — see `docs/scheduler.md`; run `python -m app.worker`, or `docker compose -f infra/docker-compose.yml up -d` for API + worker)
+- [x] Two administrator workspaces + brand theme (v0.4.0 — see `docs/workspaces-and-theme.md`): IT Operations and Security Operations, separate navigation and home dashboards, switch on one sign-in, role-based authorization; Midnight Navy / Teal / Cloud Gray system, light/dark mode, density
 - [ ] Go agent prototype (read-only inventory)
 - [ ] End-to-end enrollment flow
 - [ ] Vendor patch / CVE / threat-intel feed integrations
