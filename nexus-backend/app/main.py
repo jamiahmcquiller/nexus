@@ -1,7 +1,14 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .database import engine, Base
-from .routers import auth, devices, patches, vulnerabilities, alerts, policies, compliance
+from . import models  # noqa: F401  (registers core tables)
+from . import models_extended  # noqa: F401  (registers platform tables)
+from .routers import (
+    auth, devices, patches, vulnerabilities, alerts, policies, compliance,
+    patching, vulnops, edr, malware, browser, appcontrol, dlp, access,
+    assets, distribution, dex, remote, imaging, configmgmt, mdm,
+    encryption, servers, reporting,
+)
 
 # Create tables
 Base.metadata.create_all(bind=engine)
@@ -9,7 +16,7 @@ Base.metadata.create_all(bind=engine)
 app = FastAPI(
     title="NEXUS API",
     description="Unified IT Operations & Security Management Platform",
-    version="0.1.0",
+    version="0.2.0",
 )
 
 app.add_middleware(
@@ -20,6 +27,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Core
 app.include_router(auth.router)
 app.include_router(devices.router)
 app.include_router(patches.router)
@@ -27,6 +35,26 @@ app.include_router(vulnerabilities.router)
 app.include_router(alerts.router)
 app.include_router(policies.router)
 app.include_router(compliance.router)
+
+# Endpoint Central-style platform modules — one platform, one tenant model
+app.include_router(patching.router)
+app.include_router(vulnops.router)
+app.include_router(edr.router)
+app.include_router(malware.router)
+app.include_router(browser.router)
+app.include_router(appcontrol.router)
+app.include_router(dlp.router)
+app.include_router(access.router)
+app.include_router(assets.router)
+app.include_router(distribution.router)
+app.include_router(dex.router)
+app.include_router(remote.router)
+app.include_router(imaging.router)
+app.include_router(configmgmt.router)
+app.include_router(mdm.router)
+app.include_router(encryption.router)
+app.include_router(servers.router)
+app.include_router(reporting.router)
 
 @app.get("/")
 async def root():
@@ -44,4 +72,13 @@ async def health():
 
 @app.get("/api/v1/status")
 async def status():
-    return {"version": "0.1.0", "phase": "MVP - Endpoint Foundation"}
+    return {
+        "version": "0.2.0",
+        "phase": "Platform — patch, vulnerability, EDR, malware, ransomware, browser, app control, DLP, secure access, assets, distribution, DEX, remote, imaging, config, MDM, encryption, servers, reporting",
+        "modules": [
+            "patching", "vulnerabilities", "edr", "malware", "ransomware",
+            "browser", "app-control", "dlp", "access", "assets",
+            "distribution", "dex", "remote", "imaging", "config",
+            "mdm", "encryption", "servers", "reporting",
+        ],
+    }

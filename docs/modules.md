@@ -52,5 +52,13 @@ All modules below are designed as first-class capabilities on the same multi-ten
 - [x] Multi-tenant models for devices, patches, vulnerabilities, alerts, policies, compliance
 - [x] API routers for core modules
 - [x] Console navigation covering all major capabilities
-- [ ] Agent telemetry ingestion
-- [ ] Full workflow automation and policy engines
+- [x] Platform models + API routers for all 17 feature areas (`nexus-backend/app/models_extended.py`, `nexus-backend/app/routers/_crud.py` + 18 domain routers) — 57 tenant-scoped tables, 57 CRUD resource endpoints, plus workflow actions: patch test / approve / decline / deploy, vulnerability mitigate / remediate, EDR contain, malware quarantine, ransomware single-click recovery, MDM lock / wipe, DLP container wipe, remote-session end, server patch-window approve, privilege-grant revoke
+- [x] Console wired to all platform APIs (`frontend/src/App.tsx`) — per-module sub-sections, stats, table view, add, status change, and workflow buttons
+- [ ] Agent telemetry ingestion (endpoint / server / DEX telemetry endpoints exist; the Go agent does not yet send them)
+- [ ] Full workflow automation and policy engines (deployment scheduling, patch approval chains, and DEX remediation workflows are records + status transitions today, not background schedulers yet)
+- [ ] Real patch / AV / EDR enforcement on endpoints — the platform is the console, API, and data model; enforcement depends on the agent and on vendor patch / threat-intel feeds, which are not bundled
+
+## Verification (2026-11-21)
+- `python3 -m py_compile` passes for all new and changed backend files.
+- All 63 frontend API endpoints cross-checked against backend routers — no missing endpoint.
+- Not yet verified live: no database was available in this environment, so the API was not run end-to-end and the frontend was not built (`npm install` / `tsc` not run). Run `docker compose -f infra/docker-compose.yml up -d`, then the backend and frontend quick-start steps in the README, before demoing.
