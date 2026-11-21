@@ -16,7 +16,32 @@ nexus/
 └── README.md
 ```
 
-## Quick Start (Local Development)
+## Quick Start
+
+### GitHub Codespaces
+
+```bash
+# From the repository root
+docker compose -f infra/docker-compose.yml up -d
+
+# Install Poetry (once per Codespace)
+curl -sSL https://install.python-poetry.org | python3 -
+export PATH="$HOME/.local/bin:$PATH"
+
+# Backend
+cd backend
+poetry install
+poetry run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+
+# Frontend (new terminal)
+cd frontend
+npm install
+npm run dev -- --host 0.0.0.0
+```
+
+Forward ports 8000 (backend) and 5173 (frontend) in the Ports panel if they are not auto-forwarded.
+
+### Local Development
 
 ```bash
 # From repo root
