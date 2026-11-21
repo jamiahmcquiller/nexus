@@ -141,7 +141,11 @@ const ONLINE_MS = 60 * 60 * 1000 // 1h — online threshold, matches backend dev
 
 function parseDate(value: string | null | undefined): Date | null {
   if (!value) return null
-  const d = new Date(value)
+  // Backend datetimes are naive UTC (no zone designator). Treat them
+  // as UTC so toLocaleString() renders them in the viewer's local
+  // timezone instead of misreading them as already-local.
+  const v = value.includes('T') && !/[Zz]$|[+-]\d{2}:?\d{2}$/.test(value) ? `${value}Z` : value
+  const d = new Date(v)
   return Number.isNaN(d.getTime()) ? null : d
 }
 
@@ -627,7 +631,7 @@ export function ItOpsHome({ api, headers, onNavigate }: ItOpsHomeProps) {
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-lg font-semibold text-null-ink dark:text-white">IT Operations</h2>
             {hasSampleData && (
-              <span className="rounded-full bg-null-tealSoft px-2 py-0.5 text-xs font-medium text-null-tealDark" title="One or more rows in this dashboard are flagged is_demo by the backend">
+              <span className="rounded-full bg-null-tealSoft px-2 py-0.5 text-xs font-medium text-null-tealDark" title="Sample data — one or more rows in this view are demonstration records, not live data.">
                 Sample data
               </span>
             )}
@@ -791,7 +795,7 @@ export function ItOpsHome({ api, headers, onNavigate }: ItOpsHomeProps) {
       {hasAnyRows && (sections.os || sections.deployments || sections.enrollment) && (
         <div className="grid gap-6 lg:grid-cols-3">
           {sections.os && (
-            <ChartContainer title="OS distribution" subtitle="From device platform — version is not shown (see note in code)">
+            <ChartContainer title="OS distribution" subtitle="Grouped by platform — OS versions aren't shown">
               {osDistribution.length === 0 ? (
                 <EmptyState icon="server" title="No devices" description="No enrolled devices to distribute." />
               ) : (

@@ -84,7 +84,7 @@ const MODULES: ModuleDef[] = [
     ],
   },
   {
-    id: 'edr', label: 'Endpoint Detection & Response',
+    id: 'edr', label: 'Endpoint Detection',
     description: 'Continuous activity monitoring, MITRE ATT&CK-mapped detection, AI-guided triage, containment, and 30-day threat hunting.',
     endpoint: '/api/v1/edr/telemetry/', workspace: 'security',
     subsections: [
@@ -168,7 +168,7 @@ const MODULES: ModuleDef[] = [
     ],
   },
   {
-    id: 'dex', label: 'Digital Employee Experience',
+    id: 'dex', label: 'Employee Experience',
     description: 'Telemetry into experience scores and benchmarks, root-cause analysis, and automated remediation workflows.',
     endpoint: '/api/v1/dex/telemetry/', workspace: 'operations',
     subsections: [
@@ -199,7 +199,7 @@ const MODULES: ModuleDef[] = [
     ],
   },
   {
-    id: 'config', label: 'Configuration Management',
+    id: 'config', label: 'Configuration',
     description: 'User- and computer-based configurations, profiles, kiosk lockdown, and a script repository.',
     endpoint: '/api/v1/config/profiles/', workspace: 'operations',
     subsections: [
@@ -209,7 +209,7 @@ const MODULES: ModuleDef[] = [
     ],
   },
   {
-    id: 'mdm', label: 'Mobile Device Management',
+    id: 'mdm', label: 'Mobile Devices',
     description: 'Android, iOS, iPadOS, macOS, Windows, ChromeOS, and tvOS — enrollment, profiles, apps, kiosk, and remote lock / wipe.',
     endpoint: '/api/v1/mdm/devices/', workspace: 'operations',
     subsections: [
@@ -248,7 +248,7 @@ const MODULES: ModuleDef[] = [
     // module table. The subsections below are its 12 categories;
     // the legacy device-benchmark results still live at
     // /api/v1/compliance/ and are surfaced in the GRC overview.
-    id: 'compliance', label: 'Governance, Risk & Compliance',
+    id: 'compliance', label: 'GRC',
     description: 'Enterprise GRC — frameworks and standards, control library, assessments, evidence, findings and exceptions, risk register, remediation plans, compliance reports, audit schedule, control mapping, and settings.',
     endpoint: '/api/v1/grc/overview', workspace: 'security',
     subsections: [
@@ -846,11 +846,16 @@ function Console() {
   return (
     <div className="min-h-screen bg-null-cloud dark:bg-null-obsidian flex" data-density={density}>
       <aside className="bg-null-obsidian text-white flex flex-col shrink-0" style={{ width: sidebarCollapsed ? 72 : 248 }}>
-        <div className="px-2 py-4 border-b border-white/10 flex items-center gap-2">
+        {/* Brand row — the logo lives in a shrinkable flex-1 wrapper so its
+            intrinsic 1320px width can never push over (or swallow clicks
+            for) the collapse button beside it. */}
+        <div className="px-3 py-3 border-b border-white/10 flex items-center gap-2">
           {sidebarCollapsed ? (
             <span className="mx-auto flex h-9 w-9 items-center justify-center rounded bg-null-teal text-lg font-bold text-white" title="NULL">N</span>
           ) : (
-            <img src={NULL_LOGO_SRC} alt="NULL — Control the Complexity" className="w-full h-auto" />
+            <span className="min-w-0 flex-1">
+              <img src={NULL_LOGO_SRC} alt="NULL — Control the Complexity" className="pointer-events-none block h-[68px] w-auto max-w-full object-contain object-left" />
+            </span>
           )}
           {!sidebarCollapsed && (
             <button
@@ -858,7 +863,7 @@ function Console() {
               onClick={() => setSidebarCollapsed(true)}
               title="Collapse sidebar"
               aria-label="Collapse sidebar"
-              className="shrink-0 rounded p-1.5 text-white/70 hover:bg-null-navy2 hover:text-white"
+              className="relative z-10 shrink-0 rounded p-1.5 text-white/70 hover:bg-null-navy2 hover:text-white"
             >
               <Icon name="collapse" size={18} />
             </button>

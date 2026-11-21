@@ -59,13 +59,15 @@ DEMO_MODELS = [
 
 DEPARTMENTS = ["Finance", "Engineering", "HR", "Operations", "Security"]
 DEVICE_GROUPS = ["HQ-Desktops", "Remote-Laptops", "Lab-Workstations", "Exec-Devices"]
-# (prefix, os name, os version)
+# (prefix, os name, os version, platform) — platform matches the
+# agent's inventory shape (darwin/windows/linux) so the OS
+# distribution chart can group seeded devices instead of "Unknown".
 OS_CHOICES = [
-    ("WS", "Windows 11", "23H2"),
-    ("MB", "macOS", "15 Sequoia"),
-    ("WS", "Windows 11", "24H2"),
-    ("LT", "Ubuntu", "24.04 LTS"),
-    ("MB", "macOS", "14 Sonoma"),
+    ("WS", "Windows 11", "23H2", "windows"),
+    ("MB", "macOS", "15 Sequoia", "darwin"),
+    ("WS", "Windows 11", "24H2", "windows"),
+    ("LT", "Ubuntu", "24.04 LTS", "linux"),
+    ("MB", "macOS", "14 Sonoma", "darwin"),
 ]
 
 
@@ -101,7 +103,7 @@ def _seed_devices(db, tid, now):
     for i in range(60):
         dept = DEPARTMENTS[i % len(DEPARTMENTS)]
         group = DEVICE_GROUPS[i % len(DEVICE_GROUPS)]
-        prefix, os_name, os_ver = OS_CHOICES[i % len(OS_CHOICES)]
+        prefix, os_name, os_ver, platform = OS_CHOICES[i % len(OS_CHOICES)]
         dept_code = dept[:3].upper()
         seq = (i // len(DEPARTMENTS)) + 1
         hostname = f"{prefix}-{dept_code}-{seq:03d}"
@@ -137,9 +139,18 @@ def _seed_devices(db, tid, now):
             attributes={
                 "department": dept,
                 "device_group": group,
-                "os": os_name,
-                "os_version": os_ver,
+                # OS as an object (same shape the agent reports), so the
+                # OS distribution chart groups by platform.
+                "os": {"platform": platform, "name": os_name, "version": os_ver},
                 "health": health,
+                # Enrollment spread: the IT Ops enrollment chart buckets
+                # on attributes.collected (devices expose no
+                # created_at), so stagger first-seen dates across the
+                # past five weeks — ~12 devices per weekly bucket in
+                # the 30d view — instead of stamping every row with
+                # the same day. (+1 keeps ages off exact bucket
+                # boundaries.)
+                "collected": (now - timedelta(days=(i % 5) * 7 + (i % 3) + 1)).isoformat() + "Z",
                 "is_demo": True,
             },
         )
@@ -217,7 +228,10 @@ def _seed_patches(db, tid, now):
     patches = []
     for i in range(120):
         vendor, title, product = PATCH_TITLES[i % len(PATCH_TITLES)]
-        version = f"{2024 + (i // len(PATCH_TITLES))}.{1 + (i % 12):02d}"
+        # Version years are illustrative only and never in the future:
+        # cycle the seed year and the two years before it.
+        year = now.year - 2 + ((i // len(PATCH_TITLES)) % 3)
+        version = f"{year}.{1 + (i % 12):02d}"
         row = Patch(
             tenant_id=tid,
             title=f"{title} {version}",

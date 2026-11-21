@@ -745,7 +745,7 @@ export default function SecOpsHome(props: {
               <span
                 className="rounded-full px-2.5 py-0.5 text-xs font-medium"
                 style={{ color: NULL_COLORS.info, background: '#EAF1F7' }}
-                title="At least one record in this view is marked is_demo — sample data, not the organization's own records."
+                title="Sample data — one or more records in this view are demonstration records, not live data."
               >
                 Sample data
               </span>
@@ -1022,8 +1022,8 @@ export default function SecOpsHome(props: {
                       <DonutChart segments={alertDonut} centerLabel={String(alerts.length)} size={140} />
                     )}
                     <p className="mt-2 text-xs text-null-muted dark:text-[#8AA0B8]">
-                      IncidentResponse rows carry no severity field; the breakdown comes from the SecurityAlert
-                      record instead.
+                      Incidents don&apos;t carry a severity of their own — this breakdown comes from their
+                      related alerts.
                     </p>
                   </div>
                 </>
@@ -1042,7 +1042,7 @@ export default function SecOpsHome(props: {
                 <EmptyState
                   icon="search"
                   title="No department or OS data on devices"
-                  description="Endpoints carry no department or OS attribute, so risk cannot be broken down this way. Demo-seeded devices do carry both."
+                  description="No department or operating-system data on these endpoints, so risk can't be broken down this way."
                 />
               ) : (
                 <div className="space-y-5">
@@ -1067,8 +1067,8 @@ export default function SecOpsHome(props: {
                     </div>
                   ) : (
                     <p className="text-xs text-null-muted dark:text-[#8AA0B8]">
-                      No OS data on devices — OS breakdown omitted. (OS version is never shown: the agent&apos;s
-                      macOS version detection reads “macOS &lt;nil&gt;”.)
+                      No operating-system data on these endpoints — the OS breakdown is omitted. OS versions
+                      aren&apos;t shown.
                     </p>
                   )}
                 </div>
@@ -1098,7 +1098,7 @@ export default function SecOpsHome(props: {
                         Endpoints reporting in last 24h
                       </span>
                       <span className="font-semibold text-null-ink dark:text-white">
-                        {reporting24h} of {enrolledDevices.length}
+                        {reporting24h} of {enrolledDevices.length} enrolled
                       </span>
                     </div>
                     <div className="mt-1.5 h-2 overflow-hidden rounded bg-null-cloud dark:bg-null-navy2">
@@ -1145,9 +1145,8 @@ export default function SecOpsHome(props: {
                 </ul>
               )}
               <p className="mt-4 text-xs leading-relaxed text-null-muted dark:text-[#8AA0B8]">
-                No agent-health or EDR-coverage field exists in the platform, so EDR coverage cannot be measured
-                from this data. These are reporting recency and closure outcomes — not a claim that every endpoint
-                is protected.
+                These measure check-in recency and closure outcomes. They don&apos;t show whether every endpoint
+                is protected — protection coverage isn&apos;t tracked here.
               </p>
             </div>
           )}
@@ -1360,7 +1359,11 @@ function severityOf(row: { severity?: string | null; cvss_score?: string | numbe
 
 function parseDate(value: string | null | undefined): number | null {
   if (!value) return null
-  const t = Date.parse(value)
+  // Backend datetimes are naive UTC (no zone designator). Treat them
+  // as UTC so toLocaleString() renders them in the viewer's local
+  // timezone instead of misreading them as already-local.
+  const v = value.includes('T') && !/[Zz]$|[+-]\d{2}:?\d{2}$/.test(value) ? `${value}Z` : value
+  const t = Date.parse(v)
   return Number.isFinite(t) ? t : null
 }
 
