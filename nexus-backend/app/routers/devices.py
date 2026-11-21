@@ -11,7 +11,7 @@ from ..auth import get_current_user
 router = APIRouter(prefix="/api/v1/devices", tags=["devices"])
 
 class DeviceOut(BaseModel):
-    id: str
+    id: uuid.UUID
     hostname: Optional[str]
     device_id: str
     enrollment_status: str
@@ -51,7 +51,7 @@ def enroll_device(req: EnrollRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Invalid enrollment token")
     # Extract tenant from token format: nexus-<tenant_uuid>-<random>
     try:
-        tenant_id = uuid.UUID(req.enrollment_token.split("-")[1])
+        tenant_id = uuid.UUID(req.enrollment_token[len("nexus-"):][:36])
     except Exception:
         raise HTTPException(status_code=400, detail="Malformed enrollment token")
 
