@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import axios from 'axios'
-import { statusBadgeClasses, statusTone, DENSITY_STORAGE_KEY, THEME_STORAGE_KEY, WORKSPACE_STORAGE_KEY, TOKEN_STORAGE_KEY } from './theme'
+import { statusBadgeClasses, statusTone, THEME_STORAGE_KEY, WORKSPACE_STORAGE_KEY, TOKEN_STORAGE_KEY } from './theme'
 import GrcWorkspace from './GrcWorkspace'
-import type { Density, ThemeMode } from './theme'
+import type { ThemeMode } from './theme'
 import { WORKSPACES, getWorkspace } from './workspaces'
 import type { WorkspaceDef, WorkspaceId } from './workspaces'
-import { Breadcrumbs, Icon, ToastProvider, useToast } from './components'
+import { Breadcrumbs, Icon, ToastProvider, useToast, EndpointDetailDrawer, RemediationConfigManager, SendConfigurationModal } from './components'
 import type { IconName } from './components'
 import { ItOpsHome } from './homes/ItOpsHome'
 import SecOpsHome from './homes/SecOpsHome'
@@ -77,6 +77,7 @@ const MODULES: ModuleDef[] = [
     endpoint: '/api/v1/vulnerabilities/', workspace: 'security',
     subsections: [
       { id: 'vulns', label: 'Vulnerabilities', endpoint: '/api/v1/vulnerabilities/' },
+      { id: 'remediation-configs', label: 'Remediation configurations', endpoint: '/api/v1/remediation-configurations/' },
       { id: 'zero-day', label: 'Zero-day mitigations', endpoint: '/api/v1/zero-day-mitigations/' },
       { id: 'configs', label: 'Security configurations', endpoint: '/api/v1/security-configurations/' },
       { id: 'web', label: 'Web server hardening', endpoint: '/api/v1/web-server-hardening/' },
@@ -318,6 +319,12 @@ const SIDEBAR_COLLAPSED_KEY = 'null_sidebar_collapsed'
 
 const STATUS_OPTIONS = ['active', 'open', 'new', 'available', 'scheduled', 'testing', 'approved', 'declined', 'deployed', 'mitigated', 'remediated', 'contained', 'resolved', 'quarantined', 'recovered', 'locked', 'wiped', 'ended', 'draft', 'disabled', 'complete', 'running']
 
+// Devices carry their workflow state in enrollment_status, and the
+// backend only accepts these three values (devices.py
+// status_values) — offering the generic list here made every
+// selection from a device row fail with 400.
+const DEVICE_STATUSES = ['enrolled', 'suspended', 'decommissioned']
+
 const SEVERITY_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 }
 
 function displayName(item: any): string {
@@ -334,11 +341,6 @@ function storedTheme(): ThemeMode {
   return localStorage.getItem(THEME_STORAGE_KEY) === 'dark' ? 'dark' : 'light'
 }
 
-function storedDensity(): Density {
-  const value = localStorage.getItem(DENSITY_STORAGE_KEY)
-  return value === 'compact' || value === 'spacious' ? value : 'comfortable'
-}
-
 function storedWorkspace(): WorkspaceId {
   const value = localStorage.getItem(WORKSPACE_STORAGE_KEY)
   return value === 'security' ? 'security' : 'operations'
@@ -347,8 +349,6 @@ function storedWorkspace(): WorkspaceId {
 function storedSidebarCollapsed(): boolean {
   return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1'
 }
-
-const DENSITY_ORDER: Density[] = ['compact', 'comfortable', 'spacious']
 
 function Console() {
   const toast = useToast()
@@ -370,11 +370,14 @@ function Console() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [navQuery, setNavQuery] = useState('')
   const [theme, setTheme] = useState<ThemeMode>(storedTheme)
-  const [density, setDensity] = useState<Density>(storedDensity)
   const [backendStatus, setBackendStatus] = useState<'checking' | 'ok' | 'unreachable'>('checking')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(storedSidebarCollapsed)
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({})
   const [paletteOpen, setPaletteOpen] = useState(false)
+  const [detailDevice, setDetailDevice] = useState<any | null>(null)
+  // Vulnerability a "Send config" action was opened for; the modal
+  // queues the configuration's script as one agent command.
+  const [sendVuln, setSendVuln] = useState<any | null>(null)
   const [paletteQuery, setPaletteQuery] = useState('')
   const [paletteIndex, setPaletteIndex] = useState(0)
   const [bellOpen, setBellOpen] = useState(false)
@@ -386,21 +389,20 @@ function Console() {
   // rules; these only hide buttons a role could never use.
   const canWrite = !!sessionUser && ['owner', 'admin', 'technician'].includes(sessionUser.role)
   const canDelete = !!sessionUser && ['owner', 'admin'].includes(sessionUser.role)
+  // Sending a configuration queues an agent command — owner/admin
+  // only, matching the backend gate (agent.py + remediation_configs.py).
+  const canRunCommands = !!sessionUser && ['owner', 'admin'].includes(sessionUser.role)
   const workspaceModules = MODULES.filter((m) => m.workspace === workspace)
   const navModules = navQuery.trim()
     ? workspaceModules.filter((m) => m.label.toLowerCase().includes(navQuery.trim().toLowerCase()))
     : workspaceModules
 
-  // Theme + density apply to <html> / the app root, so every screen
+  // Theme applies to <html> / the app root, so every screen
   // follows the same tokens (see index.css).
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark')
     localStorage.setItem(THEME_STORAGE_KEY, theme)
   }, [theme])
-
-  useEffect(() => {
-    localStorage.setItem(DENSITY_STORAGE_KEY, density)
-  }, [density])
 
   useEffect(() => {
     localStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed ? '1' : '0')
@@ -529,6 +531,8 @@ function Console() {
     setModule(id)
     setSubsection(subId || '')
     setEditingId(null)
+    setDetailDevice(null)
+    setSendVuln(null)
     setNewName('')
     setPaletteOpen(false)
     setBellOpen(false)
@@ -552,12 +556,6 @@ function Console() {
   }
 
   const toggleTheme = () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))
-
-  const cycleDensity = () => {
-    const next = DENSITY_ORDER[(DENSITY_ORDER.indexOf(density) + 1) % DENSITY_ORDER.length]
-    setDensity(next)
-    toast.info(`Density: ${next}`)
-  }
 
   const login = async () => {
     try {
@@ -726,7 +724,6 @@ function Console() {
       run: () => switchWorkspace(w.id),
     })),
     { id: 'theme', label: `Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`, detail: 'Appearance', run: toggleTheme },
-    { id: 'density', label: `Cycle density (now ${density})`, detail: 'Appearance', run: cycleDensity },
     { id: 'signout', label: 'Sign out', detail: 'Session', run: signOut },
   ]
   const paletteFiltered = paletteQuery.trim()
@@ -844,7 +841,7 @@ function Console() {
   }
 
   return (
-    <div className="min-h-screen bg-null-cloud dark:bg-null-obsidian flex" data-density={density}>
+    <div className="min-h-screen bg-null-cloud dark:bg-null-obsidian flex">
       <aside className="bg-null-obsidian text-white flex flex-col shrink-0" style={{ width: sidebarCollapsed ? 72 : 248 }}>
         {/* Brand row — the logo lives in a shrinkable flex-1 wrapper so its
             intrinsic 1320px width can never push over (or swallow clicks
@@ -1080,14 +1077,6 @@ function Console() {
               </div>
             )}
           </div>
-          <label className="text-xs text-null-muted flex items-center gap-1 dark:text-[#8AA0B8]">
-            Density
-            <select className="null-input !w-auto p-1 text-xs" value={density} onChange={(e) => setDensity(e.target.value as Density)} aria-label="Display density">
-              <option value="compact">Compact</option>
-              <option value="comfortable">Comfortable</option>
-              <option value="spacious">Spacious</option>
-            </select>
-          </label>
           <button
             className="rounded border border-null-line bg-white px-3 py-1.5 text-xs hover:bg-null-cloud dark:border-white/10 dark:bg-transparent dark:text-white"
             onClick={toggleTheme}
@@ -1102,9 +1091,9 @@ function Console() {
 
         <main className="flex-1 p-6 min-w-0">
           {module === 'home' && workspace === 'operations' ? (
-            <ItOpsHome api={API} headers={headers} onNavigate={(moduleId, subsectionId) => pickModule(moduleId, subsectionId)} />
+            <ItOpsHome api={API} headers={headers} userRole={sessionUser?.role} onNavigate={(moduleId, subsectionId) => pickModule(moduleId, subsectionId)} />
           ) : module === 'home' ? (
-            <SecOpsHome api={API} headers={headers} onNavigate={(moduleId, subsectionId) => pickModule(moduleId, subsectionId)} />
+            <SecOpsHome api={API} headers={headers} userRole={sessionUser?.role} onNavigate={(moduleId, subsectionId) => pickModule(moduleId, subsectionId)} />
           ) : module === 'compliance' ? (
             <GrcWorkspace api={API} headers={headers} />
           ) : current ? (
@@ -1125,6 +1114,14 @@ function Console() {
                     ))}
                   </div>
                 )}
+                {/* The remediation-configurations subsection renders its
+                    own manager (create with script content + send
+                    history) instead of the generic stats / Add / Items
+                    table, whose Add box can only set a name. */}
+                {endpoint === '/api/v1/remediation-configurations/' ? (
+                  <RemediationConfigManager api={API} headers={headers} canWrite={canWrite} canDelete={canDelete} />
+                ) : (
+                  <>
                 <div className="grid grid-cols-3 gap-4">
                   {Object.entries(stats).map(([k, v]) => (
                     <div key={k} className="border border-null-line rounded p-4">
@@ -1150,7 +1147,10 @@ function Console() {
                     <button className="text-white px-4 rounded text-sm font-medium" style={{ background: '#218568' }} onClick={runSchedulerNow}>Run now</button>
                   </div>
                 )}
+                  </>
+                )}
               </div>
+              {endpoint !== '/api/v1/remediation-configurations/' && (
               <div className="null-card">
                 <h3 className="font-semibold mb-3 text-null-ink dark:text-white">Items</h3>
                 {items.length === 0 ? (
@@ -1170,6 +1170,7 @@ function Console() {
                         // Devices carry their workflow state in
                         // enrollment_status, not status — show that.
                         const effStatus = item.status || item.enrollment_status || ''
+                        const statusOptions = module === 'devices' ? DEVICE_STATUSES : STATUS_OPTIONS
                         const badge = statusBadgeClasses(item.severity || effStatus)
                         return (
                           <tr key={item.id} className="null-table-row border-b border-null-line align-top">
@@ -1198,7 +1199,7 @@ function Console() {
                                     disabled={!canWrite}
                                   >
                                     <option value="">{effStatus || '—'}</option>
-                                    {STATUS_OPTIONS.filter((s) => s !== effStatus).map((s) => (
+                                    {statusOptions.filter((s) => s !== effStatus).map((s) => (
                                       <option key={s} value={s}>{s}</option>
                                     ))}
                                   </select>
@@ -1207,6 +1208,12 @@ function Console() {
                             </td>
                             <td className="py-2">
                               <div className="flex flex-wrap gap-1">
+                                {module === 'devices' && (
+                                  <button className="border border-null-line rounded px-2 py-1 text-xs hover:bg-null-cloud" onClick={() => setDetailDevice(item)}>View details</button>
+                                )}
+                                {endpoint === '/api/v1/vulnerabilities/' && canRunCommands && (
+                                  <button className="border border-null-line rounded px-2 py-1 text-xs hover:bg-null-cloud" title="Queue a remediation configuration's script as an agent command on the affected endpoint" onClick={() => setSendVuln(item)}>Send config</button>
+                                )}
                                 {workflowButtons(item).map((b) => (
                                   <button key={b.action} className="border border-null-line rounded px-2 py-1 text-xs hover:bg-null-cloud" onClick={() => workflowAction(b.action, item)}>{b.label}</button>
                                 ))}
@@ -1225,10 +1232,37 @@ function Console() {
                   </table>
                 )}
               </div>
+              )}
             </div>
           ) : null}
         </main>
       </div>
+
+      {/* Endpoint detail drawer — opened from a "View details" action on
+          an Endpoints row. Owner/admin only for remote commands + wake;
+          the backend enforces the same rule. */}
+      <EndpointDetailDrawer
+        open={!!detailDevice}
+        device={detailDevice}
+        api={API}
+        headers={headers}
+        canRunCommands={!!sessionUser && ['owner', 'admin'].includes(sessionUser.role)}
+        userRole={sessionUser?.role}
+        onClose={() => setDetailDevice(null)}
+      />
+
+      {/* Send a remediation configuration for a vulnerability — opened
+          from a "Send config" action on a Vulnerabilities row.
+          Owner/admin only; the modal shows the exact script before
+          sending and the send history with agent results. */}
+      <SendConfigurationModal
+        open={!!sendVuln}
+        vulnerability={sendVuln}
+        api={API}
+        headers={headers}
+        onSent={() => { toast.success('Configuration queued — the agent runs it on its next poll.'); load() }}
+        onClose={() => setSendVuln(null)}
+      />
 
       {paletteOpen && (
         <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 pt-24" onClick={() => setPaletteOpen(false)}>

@@ -578,6 +578,47 @@ class RemediationWorkflow(Base):
     created_at = _created()
 
 
+# ------------------------------------------- vulnerability-driven configs
+# A remediation configuration is a reusable script that addresses a
+# specific vulnerability (CVE / vulnerability record). It is NOT a
+# native configuration-management profile: there is no drift detection,
+# no compliance enforcement, no desired-state engine. Sending one queues
+# a single agent command (shell/powershell) that the endpoint agent runs
+# once as its own user; the result is whatever that command returns.
+# The send record is the linkage — configuration + vulnerability +
+# device + the queued AgentCommand — so the result is visible from both
+# the vulnerability and the endpoint.
+class RemediationConfiguration(Base):
+    __tablename__ = "remediation_configurations"
+    id = _id()
+    tenant_id = _tenant()
+    name = Column(String)
+    title = Column(String)
+    description = Column(Text)
+    content = Column(Text)  # the exact script sent as the agent command
+    kind = Column(String, default="shell")  # shell, powershell
+    cve_id = Column(String)  # CVE the configuration addresses, e.g. CVE-2024-1234
+    vulnerability_id = Column(UUID(as_uuid=True), ForeignKey("vulnerabilities.id"), nullable=True)
+    status = Column(String, default="active")  # draft, active
+    is_demo = Column(Boolean, default=False)
+    attributes = _attrs()
+    created_at = _created()
+
+
+class RemediationConfigurationSend(Base):
+    __tablename__ = "remediation_configuration_sends"
+    id = _id()
+    tenant_id = _tenant()
+    configuration_id = Column(UUID(as_uuid=True), ForeignKey("remediation_configurations.id"), nullable=False)
+    vulnerability_id = Column(UUID(as_uuid=True), ForeignKey("vulnerabilities.id"), nullable=True)
+    device_id = Column(UUID(as_uuid=True), ForeignKey("devices.id"), nullable=True)
+    command_id = Column(UUID(as_uuid=True), ForeignKey("agent_commands.id"), nullable=True)
+    status = Column(String, default="sent")  # sent; the live result lives on the linked AgentCommand
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    attributes = _attrs()
+    created_at = _created()
+
+
 class ExperienceScore(Base):
     __tablename__ = "experience_scores"
     id = _id()

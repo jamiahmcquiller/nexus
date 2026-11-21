@@ -46,13 +46,59 @@ Both endpoints write an `AuditEvent` (`demo.seeded` / `demo.cleared`).
   `enrollment_status` enrolled/suspended and `last_checkin_at` spread
   over the past 7 days. **There is no department or group column on
   `Device`**, so department, device group, OS and the derived health
-  label (online/degraded/stale/offline) live in the `attributes` JSON.
+  label (online/attention/offline/degraded — the same four bucket names
+  the IT Ops home computes) live in the `attributes` JSON.
   Hostnames look like `WS-FIN-014`, `MB-ENG-022`; demo `device_id`s
   are `demo-<hostname>`.
 - Patch deployments have `created_at` spread over the past 30 days so
   trend charts have data.
 - Vulnerability `owner`, `due_at` and remediation text live in the
   `attributes` JSON (`Vulnerability` has no owner/deadline columns).
+
+## Reconciliation — what the home screens show from these rows
+
+Pinned by `tests/test_demo_seed.py::test_seed_counts_reconcile_with_home_screens`.
+If you change a seed cycle, update the test and this table together.
+
+| Screen / section | Formula (client-side, from the list endpoints) | Seeded value |
+| --- | --- | --- |
+| IT Ops — endpoint health | enrolled + check-in ≤1h → online; 1–24h → attention; >24h → offline; suspended → degraded | online 30 · attention 12 · offline 12 · degraded 6 = 60 |
+| IT Ops — OS distribution | `attributes.os.platform` | Windows 24 · macOS 24 · Linux 12 |
+| IT Ops — enrollment activity | `attributes.collected`, weekly buckets | 12 per week × 5 weeks |
+| IT Ops — patch compliance | deployed ÷ (deployed + available + testing + approved) | 57 ÷ 102 = **56%**; pending 45 |
+| IT Ops — patch statuses | all five model statuses | deployed 57 · approved 18 · available 18 · testing 9 · declined 18 = 120 |
+| IT Ops — deployment outcomes | pipeline stage per status | deployed 12 · failed 6 · scheduled 3 · approved 3 · deploying 3 · declined 3 = **30** (all rows shown) |
+| IT Ops — servers | `health_status` | healthy 5 · degraded 2 · down 1 = 8 |
+| SecOps — vulnerabilities | severity from published CVSS; status | 30 critical / 8 high / 2 medium; open 21 (critical 15 / high 5 / medium 1) · mitigated 7 · remediated 6 · accepted 6 = 40 |
+| SecOps — incidents | pending / in-progress = active | active 5 · complete 6 · failed 1 = 12 |
+| SecOps — malware | status detected = open; quarantined flag or status | detected 5 · quarantined 10 of 20 (5 quarantined + 5 remediated; 5 false-positive) |
+| SecOps — DLP | open / closed (remediated + encrypted) | open 6 · closed 6 · accepted 3 = 15 |
+| SecOps — protection coverage | enrolled reporting in last 24h | 42 of 54 enrolled |
+| SecOps — risk posture | Elevated if any open critical vuln, active incident, or unquarantined critical detection | **Elevated** (15 open critical + 5 active incidents + 5 unquarantined critical detections) |
+| Both — timestamps | stored naive UTC; both homes treat zoneless values as UTC and render local time; `attributes.collected` carries an explicit `Z` | all within the last 90 days (servers exactly 90), none in the future; patch years 2024–2026 only, zero future years |
+
+## What the seed deliberately does NOT back (explained states)
+
+- **Mean time to remediate: "—".** Neither `Vulnerability` (only
+  `detected_at`) nor `IncidentResponse` (only `created_at`) has a
+  resolution timestamp, so no MTTR can be computed. No new field was
+  added — inventing a resolution timestamp would fabricate history.
+- **Overdue remediation: omitted.** No security model has a deadline
+  field. The seed tucks a `due_at` into vulnerability `attributes`,
+  but that is seed-only synthetic data, absent on real rows, so the
+  frontend deliberately does not use it.
+- **Policy violations: 0.** The SecOps KPI counts non-compliant
+  `ComplianceResult` rows, and this seed creates no compliance
+  assessments (GRC owns that data). The 10 demo policies are
+  definitions; their sample violation counts live in `definition`
+  and are not used as a metric.
+- **Alert severity: empty state.** The seed creates no
+  `SecurityAlert` rows, so the incident section's alert-severity
+  donut renders its "No alerts recorded" empty state. Incidents
+  carry no severity of their own.
+- **EDR / agent protection coverage: not claimed.** There is no
+  agent-health or EDR-coverage field in the platform; the coverage
+  card measures check-in recency and closure rates only, and says so.
 
 ## "Sample data" labeling rule
 
@@ -97,8 +143,11 @@ state, or real detections.
   The 10 demo policies carry their sample violation counts/examples
   inside `definition` (`sample_violation_count`,
   `sample_violation_example`).
-- `Patch.status` has no `failed` value in its model comment, but the
-  column is a free string and the seed uses `failed` for a few rows
-  (the patch stats endpoint simply does not count it).
+- `Patch.status` has no `failed` value — the model comment lists
+  available / testing / approved / declined / deployed, and the
+  frontend compliance formula only handles those five. The seed
+  previously used `failed` for 9 rows, which appeared in no KPI;
+  it now uses only the five model statuses (see the reconciliation
+  table above).
 - `Server` has both `health_status` (healthy/degraded/down) and
   `status` (active); the seed sets both.

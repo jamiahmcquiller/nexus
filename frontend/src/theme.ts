@@ -125,9 +125,7 @@ export function statusBadgeClasses(value: string | undefined | null): { color: s
 }
 
 export type ThemeMode = 'light' | 'dark'
-export type Density = 'compact' | 'comfortable' | 'spacious'
 
 export const THEME_STORAGE_KEY = 'null_theme'
-export const DENSITY_STORAGE_KEY = 'null_density'
 export const WORKSPACE_STORAGE_KEY = 'null_workspace'
 export const TOKEN_STORAGE_KEY = 'null_token'

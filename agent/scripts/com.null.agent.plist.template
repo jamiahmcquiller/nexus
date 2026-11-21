@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- NULL Endpoint Agent — per-user LaunchAgent.
+	     Installed by agent/scripts/install-macos.sh, which substitutes the
+	     __PLACEHOLDER__ values below. Do not edit the installed copy by
+	     hand; re-run the installer instead. -->
+	<key>Label</key>
+	<string>com.null.agent</string>
+
+	<key>ProgramArguments</key>
+	<array>
+		<string>__AGENT_BINARY__</string>
+		<string>-server</string>
+		<string>__SERVER_URL__</string>
+		<string>-config</string>
+		<string>__AGENT_CONFIG__</string>
+		<string>-interval</string>
+		<string>30m</string>
+		<string>-inventory-interval</string>
+		<string>1h</string>
+		<string>-command-poll</string>
+		<string>30s</string>
+	</array>
+
+	<!-- Start at login and restart if the agent ever exits or crashes. -->
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+
+	<!-- Wait at least 60s between restarts so a crashing agent cannot
+	     spin the CPU or hammer the backend. -->
+	<key>ThrottleInterval</key>
+	<integer>60</integer>
+
+	<!-- Logs. The agent writes "heartbeat ok" here on every check-in. -->
+	<key>StandardOutPath</key>
+	<string>__LOG_PATH__</string>
+	<key>StandardErrorPath</key>
+	<string>__ERROR_LOG_PATH__</string>
+</dict>
+</plist>

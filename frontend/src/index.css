@@ -11,8 +11,6 @@
  * background, navy2 / Deep Slate surfaces, white primary text,
  * #8AA0B8 secondary text, hairline white borders, teal accents
  * kept, status colors kept so their meaning never changes.
- * Density is a data attribute on the app root:
- * compact / comfortable / spacious.
  */
 :root {
   --null-obsidian: #071525;
@@ -72,9 +70,9 @@
   --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
 
-[data-density='compact'] { --pad-card: 1rem; --pad-row: 0.25rem; }
-[data-density='comfortable'] { --pad-card: 1.5rem; --pad-row: 0.5rem; }
-[data-density='spacious'] { --pad-card: 2rem; --pad-row: 0.75rem; }
+/* Single standard spacing everywhere: --pad-card / --pad-row are set
+   once in :root above (the comfortable values). Density variants
+   were removed — one spacing, no select, no persistence. */
 
 body {
   font-family: Inter, system-ui, -apple-system, 'Segoe UI', sans-serif;
@@ -92,7 +90,7 @@ h1, h2, h3 { font-family: Inter, system-ui, sans-serif; letter-spacing: -0.02em;
 }
 
 /* Shared surfaces: cards, inputs, and tables read the tokens above,
-   so a theme or density change applies to every screen at once.
+   so a theme change applies to every screen at once.
    .null-* is canonical; .nexus-* is a deprecated alias kept until
    the shell migration renames the class usages in App.tsx. */
 .null-card, .nexus-card {

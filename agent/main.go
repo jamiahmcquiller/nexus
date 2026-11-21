@@ -1,4 +1,4 @@
-// NEXUS Endpoint Agent v0.3.1
+// NEXUS Endpoint Agent v0.3.2
 //
 // Endpoint agent: enrolls with the NEXUS backend using a one-time
 // enrollment token, receives its own per-device credential, and then
@@ -52,7 +52,7 @@ import (
 	"time"
 )
 
-const version = "0.3.1"
+const version = "0.3.2"
 
 const defaultServer = "http://localhost:8000"
 
@@ -115,24 +115,31 @@ func redactToken(tok string) string {
 // A failure returns "" and the error; collectors record the failure
 // and carry on — one broken collector must never fail the whole run.
 func runCmd(timeout time.Duration, name string, args ...string) (string, error) {
+	out, _, err := runCmdOut(timeout, name, args...)
+	return out, err
+}
+
+// runCmdOut is runCmd but also returns trimmed stderr (needed by
+// codesign, which reports on stderr).
+func runCmdOut(timeout time.Duration, name string, args ...string) (string, string, error) {
 	cmd := exec.Command(name, args...)
 	var out, errBuf bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errBuf
 	if err := cmd.Start(); err != nil {
-		return "", err
+		return "", "", err
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	select {
 	case err := <-done:
 		if err != nil {
-			return "", fmt.Errorf("%v: %s", err, strings.TrimSpace(errBuf.String()))
+			return "", strings.TrimSpace(errBuf.String()), fmt.Errorf("%v: %s", err, strings.TrimSpace(errBuf.String()))
 		}
-		return strings.TrimSpace(out.String()), nil
+		return strings.TrimSpace(out.String()), strings.TrimSpace(errBuf.String()), nil
 	case <-time.After(timeout):
 		_ = cmd.Process.Kill()
-		return "", fmt.Errorf("timed out after %s", timeout)
+		return "", strings.TrimSpace(errBuf.String()), fmt.Errorf("timed out after %s", timeout)
 	}
 }
 
@@ -168,13 +175,11 @@ func osInfo() map[string]any {
 			}
 		}
 	case "darwin":
-		if out, err := runCmd(10*time.Second, "sw_vers"); err == nil {
-			for k, v := range parseKVList(strings.ReplaceAll(out, ": ", "=")) {
-				info[strings.ToLower(k)] = v
-			}
-			info["name"] = "macOS " + fmt.Sprint(info["productversion"])
-			info["version"] = info["productversion"]
-		}
+		// v0.3.2: sw_vers parsing + SystemVersion.plist fallback live
+		// in macos.go (darwinOSInfo). v0.3.1 replaced ": " with "="
+		// to feed parseKVList, but sw_vers separates with colon + TAB,
+		// so nothing was ever parsed and the snapshot read "macOS <nil>".
+		return darwinOSInfo()
 	default: // linux and others
 		if data, err := os.ReadFile("/etc/os-release"); err == nil {
 			kv := parseKVList(string(data))
@@ -247,9 +252,13 @@ func memoryInfo() map[string]any {
 	return info
 }
 
-func diskInfo() []map[string]any {
+func diskInfo(errors *[]string) []map[string]any {
 	var disks []map[string]any
 	switch runtime.GOOS {
+	case "darwin":
+		// v0.3.2: one entry per PHYSICAL disk (diskutil list -plist,
+		// APFS volumes attached under their disk); see macos.go.
+		return darwinDiskInfo(errors)
 	case "windows":
 		out, err := runCmd(15*time.Second, "powershell", "-NoProfile", "-Command",
 			"Get-CimInstance Win32_LogicalDisk -Filter \"DriveType=3\" | ForEach-Object { $_.DeviceID + '|' + $_.Size + '|' + $_.FreeSpace + '|' + $_.FileSystem }")
@@ -329,24 +338,12 @@ func softwareList(errors *[]string) []map[string]any {
 			add(parts[0], ver, vendor)
 		}
 	case "darwin":
-		entries, err := os.ReadDir("/Applications")
-		if err != nil {
-			*errors = append(*errors, "software (/Applications): "+err.Error())
-			break
-		}
-		for _, e := range entries {
-			if strings.HasSuffix(e.Name(), ".app") {
-				add(strings.TrimSuffix(e.Name(), ".app"), "", "Apple")
-			}
-		}
-		if out, err := runCmd(15*time.Second, "brew", "list", "--versions"); err == nil {
-			for _, line := range strings.Split(out, "\n") {
-				f := strings.Fields(line)
-				if len(f) >= 2 {
-					add(f[0], f[1], "Homebrew")
-				}
-			}
-		}
+		// v0.3.2: real bundle metadata from each .app's Info.plist
+		// (name/version/bundle id/vendor), scanned across
+		// /Applications, /System/Applications and ~/Applications;
+		// see macos.go (darwinSoftwareList). v0.3.1 only listed
+		// directory names under /Applications and hardcoded "Apple".
+		return darwinSoftwareList(errors)
 	default:
 		if out, err := runCmd(30*time.Second, "dpkg-query", "-W", "-f=${Package}|${Version}\n"); err == nil {
 			for _, line := range strings.Split(out, "\n") {
@@ -444,7 +441,7 @@ func collectInventory() inventory {
 		"hostname": hostname,
 		"cpu":      cpuInfo(),
 		"memory":   memoryInfo(),
-		"disks":    diskInfo(),
+		"disks":    diskInfo(&errs),
 		"network":  networkInfo(),
 	}
 	inv := inventory{
@@ -482,6 +479,12 @@ func (c *client) post(path string, payload any) (int, []byte, error) {
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
+	// v0.3.2: a Codespace port flipped to Private answers with the
+	// GitHub sign-in wall (401 / HTML) instead of the backend — say so
+	// plainly instead of returning a bare 401. See detect.go.
+	if err := checkBackendResponse(resp, body, req.URL.String()); err != nil {
+		return 0, nil, err
+	}
 	return resp.StatusCode, body, nil
 }
 
@@ -507,6 +510,10 @@ func (c *client) postDevice(path string, payload any) (int, []byte, error) {
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
+	// v0.3.2: sign-in-wall detection, see post() above.
+	if err := checkBackendResponse(resp, body, req.URL.String()); err != nil {
+		return 0, nil, err
+	}
 	return resp.StatusCode, body, nil
 }
 
@@ -595,6 +602,12 @@ func (c *client) nextCommand(deviceID string) (*agentCommand, error) {
 		return nil, nil
 	}
 	body, _ := io.ReadAll(resp.Body)
+	// v0.3.2: sign-in-wall detection — a Codespace port flipped to
+	// Private answers the poll with the GitHub sign-in HTML page
+	// instead of JSON (or a 204). See detect.go.
+	if err := checkBackendResponse(resp, body, req.URL.String()); err != nil {
+		return nil, err
+	}
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("command poll failed (HTTP %d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}

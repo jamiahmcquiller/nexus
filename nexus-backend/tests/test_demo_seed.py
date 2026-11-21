@@ -26,6 +26,7 @@ from app.auth import create_access_token
 from app.routers.demo import router as demo_router, PROTECTED_DEVICE_ID
 from app.routers.devices import router as devices_router
 from app.routers.patches import router as patches_router
+from app.routers.patching import router as patching_router
 from app.routers.vulnerabilities import router as vulns_router
 from app.routers.edr import router as edr_router
 from app.routers.malware import router as malware_router
@@ -80,7 +81,7 @@ def _make_user(db_engine, role="owner"):
 
 def _client(db_engine):
     app = FastAPI()
-    for r in (demo_router, devices_router, patches_router, vulns_router,
+    for r in (demo_router, devices_router, patches_router, patching_router, vulns_router,
               edr_router, malware_router, dlp_router, policies_router,
               servers_router, grc_router):
         app.include_router(r)
@@ -133,7 +134,11 @@ def test_seed_twice_yields_identical_counts(db_engine):
     patches = client.get("/api/v1/patches/", headers=headers).json()
     assert len(patches) == 120
     assert all(p["is_demo"] is True for p in patches)
-    assert {p["status"] for p in patches} >= {"available", "deployed", "failed"}
+    # Every patch status is one of the model's five — there is no
+    # "failed" patch status, and the old seed used it for 9 rows the
+    # compliance formula silently dropped.
+    assert {p["status"] for p in patches} == {
+        "available", "deployed", "approved", "testing", "declined"}
 
     vulns = client.get("/api/v1/vulnerabilities/", headers=headers).json()
     assert len(vulns) == 40
@@ -223,14 +228,29 @@ def test_seed_and_clear_require_owner_or_admin(db_engine):
 
 
 def test_real_mac_survives_seed_and_clear_demo(db_engine):
+    from datetime import datetime
+
     client = _client(db_engine)
     headers, user = _auth(db_engine)
     session = _db(db_engine)
+    # Distinctive values so "survives" means byte-identical, not just
+    # "a row with that id still exists".
+    mac_checkin = datetime(2026, 11, 21, 9, 11, 46)
+    mac_attrs = {"os": {"platform": "darwin", "name": "macOS", "version": "15 Sequoia"},
+                 "department": "Security"}
     mac = models.Device(
         tenant_id=user["tenant_id"], hostname="Jamiahs-MacBook-Air-2.local",
         device_id=PROTECTED_DEVICE_ID, enrollment_status="enrolled",
-        agent_version="0.3.1")
+        agent_version="0.3.1", last_checkin_at=mac_checkin,
+        attributes=mac_attrs)
+    # A real row whose device_id merely LOOKS like a demo id: clear-demo
+    # deletes by is_demo, never by prefix, so this must survive too.
+    lookalike = models.Device(
+        tenant_id=user["tenant_id"], hostname="DEMO-LOOKALIKE",
+        device_id="demo-not-a-demo-row", enrollment_status="enrolled",
+        is_demo=False)
     session.add(mac)
+    session.add(lookalike)
     session.commit()
     session.close()
 
@@ -245,10 +265,22 @@ def test_real_mac_survives_seed_and_clear_demo(db_engine):
     assert mac_after_seed.enrollment_status == "enrolled"
     assert mac_after_seed.agent_version == "0.3.1"
     assert mac_after_seed.is_demo is False
+    assert mac_after_seed.last_checkin_at == mac_checkin
+    assert mac_after_seed.attributes == mac_attrs
     assert session.query(models.Device).filter(
         models.Device.tenant_id == user["tenant_id"],
         models.Device.device_id == PROTECTED_DEVICE_ID).count() == 1
+    # Exactly 60 demo devices + the Mac + the lookalike; no demo row
+    # shares the Mac's id or hostname.
+    assert session.query(models.Device).filter(
+        models.Device.tenant_id == user["tenant_id"],
+        models.Device.is_demo.is_(True)).count() == 60
+    assert session.query(models.Device).filter(
+        models.Device.tenant_id == user["tenant_id"],
+        models.Device.hostname == "Jamiahs-MacBook-Air-2.local").count() == 1
     session.close()
+
+    assert len(client.get("/api/v1/devices/", headers=headers).json()) == 62
 
     cleared = client.post("/api/v1/demo/clear-demo", headers=headers)
     assert cleared.json()["deleted"]["devices"] == 60
@@ -258,7 +290,19 @@ def test_real_mac_survives_seed_and_clear_demo(db_engine):
         models.Device.device_id == PROTECTED_DEVICE_ID).one()
     assert mac_after_clear.hostname == "Jamiahs-MacBook-Air-2.local"
     assert mac_after_clear.is_demo is False
+    assert mac_after_clear.last_checkin_at == mac_checkin
+    assert mac_after_clear.attributes == mac_attrs
+    assert session.query(models.Device).filter(
+        models.Device.device_id == "demo-not-a-demo-row").one().is_demo is False
+    assert session.query(models.Device).filter(
+        models.Device.tenant_id == user["tenant_id"]).count() == 2
     session.close()
+
+    # Re-seeding after a clear still works with the Mac present.
+    again = client.post("/api/v1/demo/seed", headers=headers)
+    assert again.json()["seeded"] is True
+    assert again.json()["counts"]["devices"] == 60
+    assert len(client.get("/api/v1/devices/", headers=headers).json()) == 62
 
 
 def test_ensure_is_demo_columns_backfills_old_schema(db_engine):
@@ -293,3 +337,163 @@ def test_ensure_is_demo_columns_backfills_old_schema(db_engine):
     devices = client.get("/api/v1/devices/", headers=headers).json()
     assert len(devices) == 60
     assert all(d["is_demo"] is True for d in devices)
+
+
+def test_seed_counts_reconcile_with_home_screens(db_engine):
+    """Every number the two home screens show must reconcile with the seed.
+
+    Replicates the frontend formulas over the API lists a seeded tenant
+    returns — ItOpsHome's health buckets (1h / 24h thresholds) and patch
+    compliance, SecOpsHome's open / remediated / quarantined / closed
+    splits. If you change a seed cycle, update the expected numbers
+    here and in docs/demo-data.md.
+    """
+    from collections import Counter
+    from datetime import datetime, timedelta, timezone
+
+    client = _client(db_engine)
+    headers, _ = _auth(db_engine)
+    body = client.post("/api/v1/demo/seed", headers=headers).json()
+    assert body["seeded"] is True
+    assert sum(body["counts"].values()) == 315
+
+    def _get(path):
+        r = client.get(path, headers=headers)
+        assert r.status_code == 200, path
+        return r.json()
+
+    def _parse(value):
+        # Backend datetimes are naive UTC; treat them as UTC, exactly
+        # as both home screens' parseDate does (append "Z").
+        assert value, "seeded rows must always carry a timestamp"
+        v = value if value.endswith("Z") or "+" in value[10:] else value + "Z"
+        return datetime.fromisoformat(v.replace("Z", "+00:00"))
+
+    now = datetime.now(timezone.utc)
+    devices = _get("/api/v1/devices/")
+    patches = _get("/api/v1/patches/")
+    deployments = _get("/api/v1/patch-deployments/")
+    servers = _get("/api/v1/servers/")
+    vulns = _get("/api/v1/vulnerabilities/")
+    incidents = _get("/api/v1/edr/incidents/")
+    malware = _get("/api/v1/malware/detections/")
+    dlp = _get("/api/v1/dlp/findings/")
+    policies = _get("/api/v1/policies/")
+
+    # --- devices: health buckets, OS, departments, groups, enrollment
+    health = Counter()
+    for d in devices:
+        assert d["device_id"].startswith("demo-")
+        status = (d["enrollment_status"] or "").lower()
+        if status == "suspended":
+            health["degraded"] += 1
+            continue
+        assert status == "enrolled"
+        last = _parse(d["last_checkin_at"])
+        assert now - timedelta(days=7) <= last <= now + timedelta(minutes=5)
+        age = (now - last).total_seconds()
+        if age <= 3600:
+            health["online"] += 1
+        elif age <= 86400:
+            health["attention"] += 1
+        else:
+            health["offline"] += 1
+    assert dict(health) == {"online": 30, "attention": 12, "offline": 12, "degraded": 6}
+    assert Counter((d["attributes"]["os"] or {}).get("platform") for d in devices) == {
+        "windows": 24, "darwin": 24, "linux": 12}
+    assert Counter(d["attributes"]["department"] for d in devices) == {
+        dept: 12 for dept in ("Finance", "Engineering", "HR", "Operations", "Security")}
+    assert Counter(d["attributes"]["device_group"] for d in devices) == {
+        group: 15 for group in ("HQ-Desktops", "Remote-Laptops", "Lab-Workstations", "Exec-Devices")}
+    assert all(d["attributes"]["collected"].endswith("Z") for d in devices)
+    assert Counter((now - _parse(d["attributes"]["collected"])).days // 7
+                   for d in devices) == {0: 12, 1: 12, 2: 12, 3: 12, 4: 12}
+    # Protection coverage denominator: 54 enrolled, of which the 30
+    # online + 12 attention checked in within the last 24h.
+    enrolled = [d for d in devices if d["enrollment_status"] == "enrolled"]
+    assert len(enrolled) == 54
+    assert sum(1 for d in enrolled
+               if (now - _parse(d["last_checkin_at"])).total_seconds() <= 86400) == 42
+
+    # --- patches: every status is a model status; compliance reconciles
+    assert Counter(p["status"] for p in patches) == {
+        "deployed": 57, "approved": 18, "available": 18, "testing": 9, "declined": 18}
+    assert "failed" not in {p["status"] for p in patches}
+    years = {int(p["title"].rsplit(" ", 1)[-1].split(".")[0]) for p in patches}
+    assert years <= {now.year - 2, now.year - 1, now.year}
+    deployed = sum(1 for p in patches if p["status"] == "deployed")
+    denom = sum(1 for p in patches if p["status"] in
+                ("deployed", "available", "testing", "approved"))
+    assert (deployed, denom) == (57, 102)
+    assert round(deployed / denom * 100) == 56  # patch compliance %
+    assert sum(1 for p in patches if p["status"] in
+               ("available", "testing", "approved")) == 45  # pending
+
+    # --- deployments: the pipeline renders a stage per status, and
+    # those stages must account for all 30 rows.
+    assert Counter(d["status"] for d in deployments) == {
+        "deployed": 12, "failed": 6, "scheduled": 3, "approved": 3,
+        "deploying": 3, "declined": 3}
+    assert len(deployments) == 30
+
+    # --- servers: all three health states exercised, 8 total.
+    assert Counter(s["health_status"] for s in servers) == {
+        "healthy": 5, "degraded": 2, "down": 1}
+    assert all(s["status"] == "active" for s in servers)
+
+    # --- vulnerabilities: severity from published CVSS, open split
+    assert Counter(v["severity"] for v in vulns) == {
+        "critical": 30, "high": 8, "medium": 2}
+    assert Counter(v["status"] for v in vulns) == {
+        "open": 21, "mitigated": 7, "remediated": 6, "accepted": 6}
+    open_vulns = [v for v in vulns if v["status"] == "open"]
+    assert Counter(v["severity"] for v in open_vulns) == {
+        "critical": 15, "high": 5, "medium": 1}
+    for v in vulns:
+        score = float(v["cvss_score"])
+        expected = ("critical" if score >= 9.0 else "high" if score >= 7.0
+                    else "medium" if score >= 4.0 else "low")
+        assert v["severity"] == expected, v["cve_id"]
+    assert len({v["device_id"] for v in open_vulns
+               if v["severity"] in ("critical", "high")}) == 20  # high-risk endpoints
+
+    # --- incidents: bars Open / Resolved / Failed sum to 12.
+    assert Counter(i["status"] for i in incidents) == {
+        "complete": 6, "pending": 2, "in-progress": 3, "failed": 1}
+    assert sum(1 for i in incidents if i["status"] in ("pending", "in-progress")) == 5
+
+    # --- malware: detected 5, quarantined 10 of 20.
+    assert Counter(m["status"] for m in malware) == {
+        "detected": 5, "quarantined": 5, "remediated": 5, "false-positive": 5}
+    assert sum(1 for m in malware if m["status"] == "detected") == 5
+    assert sum(1 for m in malware if m["quarantined"] or m["status"] in
+               ("quarantined", "remediated")) == 10
+    assert all(m["severity"] == "critical" for m in malware
+               if m["status"] == "detected")
+
+    # --- DLP: open 6, closed 6, accepted 3 = 15.
+    assert Counter(d["status"] for d in dlp) == {
+        "open": 6, "encrypted": 3, "remediated": 3, "accepted": 3}
+    assert sum(1 for d in dlp if d["status"] in ("remediated", "encrypted")) == 6
+
+    # --- policies: 10 definitions, 9 active + 1 draft.
+    assert len(policies) == 10
+    assert Counter(p["status"] for p in policies) == {"active": 9, "draft": 1}
+
+    # --- timestamps: every seeded timestamp is a UTC instant in the
+    # recent past (servers are stamped exactly 90 days back), never in
+    # the future and never in a future year.
+    stamp_rows = (
+        [(d["last_checkin_at"], d["created_at"]) for d in devices]
+        + [(p["created_at"],) for p in patches]
+        + [(d["created_at"],) for d in deployments]
+        + [(s["created_at"],) for s in servers]
+        + [(v["detected_at"],) for v in vulns]
+        + [(i["created_at"],) for i in incidents]
+        + [(m["created_at"],) for m in malware]
+        + [(d["created_at"],) for d in dlp]
+    )
+    for stamps in stamp_rows:
+        for stamp in stamps:
+            t = _parse(stamp)
+            assert now - timedelta(days=91) <= t <= now + timedelta(minutes=5), stamp

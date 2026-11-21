@@ -23,6 +23,12 @@ export type { AttentionItem, AttentionSeverity } from './AttentionQueue'
 
 export { DetailDrawer } from './DetailDrawer'
 
+export { EndpointDetailDrawer } from './EndpointDetailDrawer'
+export type { EndpointDeviceRecord } from './EndpointDetailDrawer'
+
+export { SendConfigurationModal } from './SendConfigurationModal'
+export { RemediationConfigManager } from './RemediationConfigManager'
+
 export { Tabs } from './Tabs'
 export type { TabItem } from './Tabs'
 

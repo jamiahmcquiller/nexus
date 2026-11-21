@@ -21,8 +21,17 @@ HONESTY — these rows are SAMPLE data, not live telemetry:
 - No user login accounts are seeded. The real enrolled Mac
   (device_id ``darwin-ac913e0958751651``) is never flagged demo, never
   modified, and never deleted by either endpoint.
+- RECONCILIATION — every number the two home screens show is derived
+  from these rows, so the seed's splits are pinned by
+  ``tests/test_demo_seed.py::test_seed_counts_reconcile_with_home_screens``
+  (deployment outcomes deployed 12 / failed 6 / scheduled 3 /
+  approved 3 / deploying 3 / declined 3 = 30; patch compliance
+  57/102 = 56%; device health online 30 / attention 12 / offline 12 /
+  degraded 6; open vulns 21 = critical 15 / high 5 / medium 1; and the
+  incident / malware / DLP / server splits). Change a cycle only if
+  you update that test's expected numbers too.
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
@@ -98,8 +107,31 @@ def _audit(db, action, current_user, counts):
 
 
 # ------------------------------------------------------------------ devices
+# HEALTH BUCKETS — the IT Ops home derives these from
+# enrollment_status + last_checkin_at (same 1h / 24h thresholds as
+# /api/v1/devices/stats), so the seed assigns check-in ages by
+# ENROLLED ordinal, not raw index: the 6 suspended devices must never
+# steal a slot from the fresh half, or "online" would read 28 instead
+# of the intended 30. Resulting demo-only split (verified in
+# tests/test_demo_seed.py::test_seed_counts_reconcile_with_home_screens):
+#   online 30 (checked in 0–58 min ago) · attention 12 (2–20 h ago)
+#   offline 12 (25 h–5.6 d ago) · degraded 6 (suspended) = 60.
+# The attributes.health label uses the same four bucket names.
+def _checkin_age_min(enrolled_ordinal, suspended, index):
+    if suspended:
+        # Suspended devices are "degraded" whatever their check-in, so
+        # give them a stale one (2–6 days) for realism; it feeds no KPI.
+        return 2 * 24 * 60 + (index * 53) % (4 * 24 * 60)
+    if enrolled_ordinal < 30:
+        return enrolled_ordinal * 2
+    if enrolled_ordinal < 42:
+        return 120 + (enrolled_ordinal - 30) * 100
+    return 1500 + (enrolled_ordinal - 42) * 600
+
+
 def _seed_devices(db, tid, now):
     devices = []
+    enrolled_ordinal = 0
     for i in range(60):
         dept = DEPARTMENTS[i % len(DEPARTMENTS)]
         group = DEVICE_GROUPS[i % len(DEVICE_GROUPS)]
@@ -107,25 +139,22 @@ def _seed_devices(db, tid, now):
         dept_code = dept[:3].upper()
         seq = (i // len(DEPARTMENTS)) + 1
         hostname = f"{prefix}-{dept_code}-{seq:03d}"
-        # Last check-in: half the fleet checked in within the last hour
-        # (so the devices /stats "online" count looks like a live
-        # fleet), the other half spread deterministically over the
-        # past 7 days (degraded / stale / offline).
-        if i < 30:
-            age_min = i * 2
-        else:
-            age_min = ((i - 30) * 337) % (7 * 24 * 60)
-        checkin = now - timedelta(minutes=age_min)
-        if age_min < 60:
-            health = "online"
-        elif age_min < 24 * 60:
-            health = "degraded"
-        elif age_min < 3 * 24 * 60:
-            health = "stale"
-        else:
-            health = "offline"
         enrollment = "suspended" if i % 10 == 9 else "enrolled"
-        if enrollment == "suspended":
+        suspended = enrollment == "suspended"
+        if not suspended:
+            ordinal = enrolled_ordinal
+            enrolled_ordinal += 1
+        else:
+            ordinal = None
+        age_min = _checkin_age_min(ordinal, suspended, i)
+        checkin = now - timedelta(minutes=age_min)
+        if suspended:
+            health = "degraded"
+        elif age_min <= 60:
+            health = "online"
+        elif age_min <= 24 * 60:
+            health = "attention"
+        else:
             health = "offline"
         row = Device(
             tenant_id=tid,
@@ -144,12 +173,12 @@ def _seed_devices(db, tid, now):
                 "os": {"platform": platform, "name": os_name, "version": os_ver},
                 "health": health,
                 # Enrollment spread: the IT Ops enrollment chart buckets
-                # on attributes.collected (devices expose no
-                # created_at), so stagger first-seen dates across the
-                # past five weeks — ~12 devices per weekly bucket in
-                # the 30d view — instead of stamping every row with
-                # the same day. (+1 keeps ages off exact bucket
-                # boundaries.)
+                # on attributes.collected (the RFC3339 timestamp the
+                # agent sends at enrollment), so stagger first-seen
+                # dates across the past five weeks — 12 devices per
+                # weekly bucket in the 30d view — instead of stamping
+                # every row with the same day. (+1 keeps ages off exact
+                # bucket boundaries.) The "Z" suffix marks it as UTC.
                 "collected": (now - timedelta(days=(i % 5) * 7 + (i % 3) + 1)).isoformat() + "Z",
                 "is_demo": True,
             },
@@ -169,7 +198,9 @@ SERVER_SPECS = [
     ("SRV-WEB-02", "Ubuntu Server 22.04", "Web Server", "healthy"),
     ("SRV-BKP-01", "Red Hat Enterprise Linux 9", "Backup Server", "degraded"),
     ("SRV-APP-01", "Windows Server 2022", "Application Server", "healthy"),
-    ("SRV-PRINT-01", "Windows Server 2019", "Print Server", "healthy"),
+    # One server down so the server panel and the attention queue
+    # exercise all three health states: 5 healthy / 2 degraded / 1 down.
+    ("SRV-PRINT-01", "Windows Server 2019", "Print Server", "down"),
 ]
 
 
@@ -217,9 +248,17 @@ PATCH_TITLES = [
     ("Adobe", "Security Update for Adobe Creative Cloud", "Adobe Creative Cloud"),
     ("Google", "ChromeOS Flex Update", "ChromeOS"),
 ]
+# Patch statuses — every value here MUST be one of the model's five
+# (available / testing / approved / declined / deployed). There is no
+# "failed" patch status: the old cycle used it for 9 rows and the IT
+# Ops compliance formula (deployed / deployed+available+testing+
+# approved) silently dropped them, so 9 of 120 patches appeared in no
+# KPI at all. Resulting split (verified in test_demo_seed.py):
+#   deployed 57 · approved 18 · available 18 · testing 9 · declined 18
+#   = 120. Compliance = 57 / (57+18+18+9) = 56%; pending = 45.
 PATCH_STATUSES = (
     ["deployed"] * 6 + ["approved"] * 2 + ["available"] * 2
-    + ["testing", "declined", "failed"]
+    + ["testing", "declined", "declined"]
 )
 PATCH_SEVERITIES = ["critical", "important", "important", "moderate", "low"]
 
@@ -250,8 +289,21 @@ def _seed_patches(db, tid, now):
 
 
 def _seed_deployments(db, tid, now, patches):
-    statuses = ["deployed", "deployed", "deployed", "failed", "scheduled",
-                "approved", "deploying", "declined", "deployed", "failed"]
+    # Deployment pipeline — every row carries one of the documented
+    # PatchDeployment statuses, and the IT Ops pipeline panel renders
+    # a stage for each, so all 30 rows are visible: deployed 12 /
+    # failed 6 / scheduled 3 / approved 3 / deploying 3 / declined 3
+    # = 30. (An earlier version collapsed everything to terminal
+    # outcomes because the old outcomes chart rendered only
+    # Deployed/Failed bars; the pipeline panel renders every stage,
+    # so the in-flight stages are real again.) The failed count also
+    # feeds the "Failed deployments" KPI and the attention queue.
+    statuses = (
+        ["deployed"] * 12
+        + ["failed"] * 6
+        + ["scheduled", "approved", "deploying"] * 3
+        + ["declined"] * 3
+    )
     test_results = ["pass", "pass", "pass", "fail", "pending"]
     rows = []
     for i in range(30):
@@ -323,6 +375,14 @@ CVE_SPECS = [
     ("CVE-2022-2294", "Google Chrome WebRTC heap buffer overflow", "6.8"),
     ("CVE-2023-20593", "AMD Zenbleed information disclosure", "6.5"),
 ]
+# Resulting splits (verified in test_demo_seed.py — change the cycles
+# only if you update the test's expected numbers too):
+#   severity: 30 critical / 8 high / 2 medium (from the published CVSS
+#     scores; no low — the famous-CVE set has none below 6.5)
+#   status: open 21 (critical 15 / high 5 / medium 1 — the SecOps
+#     donut) · mitigated 7 · remediated 6 · accepted 6 = 40.
+#   Open + mitigated + remediated + accepted accounts for every row;
+#   the SecOps KPI shows open 21 with "6 remediated" in its sublabel.
 VULN_STATUSES = ["open", "open", "open", "mitigated", "remediated", "accepted"]
 VULN_OWNERS = ["IT Operations", "Security Operations", "Patch Team", "Infrastructure"]
 
@@ -370,6 +430,9 @@ def _seed_vulnerabilities(db, tid, now, devices):
 
 
 # ------------------------------------------------------- EDR / malware / DLP
+# Incident outcomes (verified in test_demo_seed.py): active 5
+# (pending 2 + in-progress 3) · complete 6 · failed 1 = 12, which is
+# exactly the SecOps incident bars (Open / Resolved / Failed).
 INCIDENT_SPECS = [
     ("Isolate host after suspicious PowerShell", "isolate", "complete"),
     ("Kill malicious process on finance workstation", "kill-process", "complete"),
@@ -395,6 +458,12 @@ MALWARE_NAMES = [
     ("Bumblebee", "behavior"), ("LockBit", "behavior"), ("BlackCat/ALPHV", "behavior"),
     ("Conti", "behavior"),
 ]
+# Malware split (verified in test_demo_seed.py): 5 each of detected /
+# quarantined / remediated / false-positive = 20. The SecOps KPI shows
+# detected 5 with "10 quarantined" (quarantined flag is set exactly
+# for the quarantined + remediated rows); all 5 detected rows are
+# critical severity, so the risk posture is Elevated on that driver
+# alone. False positives count toward the 20 total, as the KPI states.
 MALWARE_STATUSES = ["detected", "quarantined", "remediated", "false-positive"]
 
 DLP_SPECS = [
@@ -414,6 +483,10 @@ DLP_SPECS = [
     ("Passport scans in HR folder", "pii", "Confidential"),
     ("Custom pattern: internal project codenames", "custom", "Internal"),
 ]
+# DLP split (verified in test_demo_seed.py): open 6 · encrypted 3 ·
+# remediated 3 · accepted 3 = 15. The SecOps KPI shows open 6 with
+# "6 closed" (remediated + encrypted); the 3 accepted findings are
+# neither open nor closed and are accounted for in the 15 total.
 DLP_STATUSES = ["open", "open", "encrypted", "remediated", "accepted"]
 
 
@@ -543,7 +616,20 @@ def seed_demo(db: Session = Depends(get_db),
         counts = _counts(db, tid)
         return {"seeded": False, "reason": "demo data already exists",
                 "counts": counts, **counts}
-    now = datetime.utcnow()
+    now_utc = datetime.now(timezone.utc)
+    # Timestamps are computed from a timezone-aware UTC instant, then
+    # stored naive: every DateTime column in the platform is TIMESTAMP
+    # WITHOUT TIME ZONE and every model default is datetime.utcnow, so
+    # stored values are UTC wall-clock by convention. (Verified: storing
+    # a tz-aware datetime through SQLAlchemy/SQLite silently strips the
+    # offset, and on Postgres the cast would depend on the session
+    # TimeZone — so an aware value buys nothing and risks shifting the
+    # 1h "online" bucket on the live database.) The API therefore
+    # serializes zoneless UTC, and both home screens treat zoneless
+    # values as UTC (their parseDate appends "Z") so they render in
+    # the viewer's local time; attributes.collected carries an
+    # explicit "Z" suffix because it is a plain string.
+    now = now_utc.replace(tzinfo=None)
 
     # The seed only ever creates device_ids starting with "demo-", so
     # the real Mac (darwin-ac913e0958751651) can never be overwritten

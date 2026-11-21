@@ -85,4 +85,4 @@ or `docker compose -f infra/docker-compose.yml up -d`.
   with separate navigation and home dashboards, single-sign-on
   switching, role-based authorization
   (`GET /api/v1/auth/workspaces`), and the Midnight Navy / Teal
-  brand system (light/dark mode, density) applied to every screen
+  brand system (light/dark mode) applied to every screen

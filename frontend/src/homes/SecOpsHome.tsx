@@ -2,13 +2,19 @@
 //
 // Deliberately NOT the IT Ops home with different numbers: this screen
 // leads with a risk-posture strip, then a severity-forward layout —
-// vulnerability exposure + incident response on the left, risk
-// distribution + protection coverage on the right, attention queue +
-// activity timeline below.
+// exposure summary, investigation queue, vulnerability
+// prioritization, incident response, attack surface, remediation
+// tracking, activity feed.
 //
 // Every number is computed client-side from live API lists. Nothing
 // is fabricated: a series with no underlying rows renders an
-// EmptyState, not zeros dressed up as a chart.
+// EmptyState, not zeros dressed up as a chart. Clicking a number,
+// chart segment, queue row, vuln row, or timeline entry opens the
+// drill-down drawer on the underlying records — there are no dead
+// clicks. Device drill-downs open the shared EndpointDetailDrawer
+// (components/EndpointDetailDrawer.tsx); every other record type
+// opens the generic DetailDrawer with the secops/DrawerViews
+// content.
 //
 // ── Data formulas (the contract — change these only deliberately) ──
 //
@@ -22,27 +28,31 @@
 //                    is_demo, created_at — NO severity field)
 //   malware          /api/v1/malware/detections/ (MalwareDetection:
 //                    severity, quarantined bool, status detected/
-//                    quarantined/remediated/false-positive, is_demo,
-//                    created_at)
+//                    quarantined/remediated/false-positive, mitre_ttp,
+//                    detection_layer, is_demo, created_at)
 //   dlp              /api/v1/dlp/findings/      (SensitiveDataFinding:
 //                    data_type, classification, status open/encrypted/
 //                    remediated/accepted, is_demo, created_at)
 //   alerts           /api/v1/alerts/            (SecurityAlert: severity,
 //                    category, status new/investigating/contained/
-//                    resolved, created_at — NO is_demo column)
+//                    resolved, created_at — NO is_demo column; the
+//                    demo seed creates NO alert rows)
 //   compliance       /api/v1/compliance/        (ComplianceResult: benchmark,
 //                    score, status compliant/non_compliant, findings,
-//                    assessed_at — NO is_demo, NO created_at)
+//                    assessed_at — NO is_demo, NO created_at; the demo
+//                    seed creates NO compliance rows)
 //   policies         /api/v1/policies/          (Policy: name, policy_type,
 //                    status, definition, is_demo, created_at — a policy
 //                    DEFINITION; there is no violation record type)
 //   devices          /api/v1/devices/           (DeviceOut: hostname,
 //                    device_id, enrollment_status, agent_version,
-//                    last_checkin_at, attributes — NOT created_at and
-//                    NOT is_demo, so devices cannot feed the sample
-//                    pill; attributes.department / attributes.os exist
-//                    only on demo-seeded rows — real agent devices do
-//                    not carry them)
+//                    last_checkin_at, attributes, is_demo, created_at.
+//                    DeviceOut DOES serialize is_demo — an older
+//                    comment claimed otherwise; the router is the
+//                    source of truth, so devices feed the sample pill
+//                    and the Live/Sample split. attributes.department /
+//                    attributes.os exist only on demo-seeded rows —
+//                    real agent devices do not carry them.)
 // All list responses serialize every column (_crud._serialize, or
 // FastAPI jsonable_encoder for the raw-ORM lists), so is_demo IS
 // present wherever the model has the column.
@@ -56,8 +66,16 @@
 //              assessment.
 //   Stable   — none of the above.
 //
+// SUMMARY BAND (four combined panels, not eight identical cards):
+//   Exposure — open vulns with severity stack + new-detection
+//     sparkline + range trend. Incident response — active incidents
+//     with outcome stack. Detections & data risk — unquarantined
+//     malware + quarantine rate, open DLP + closure rate. Fleet &
+//     remediation — high-risk endpoints, 24h reporting, remediation
+//     progress, MTTR "—".
+//
 // KPIs (all current state, NOT range-scoped; the range selector drives
-// the trend chart, the timeline, and the "new in range" KPI trends):
+// the trend chart, the timeline, and the "new in range" trends):
 //   Open vulnerabilities   = vulns with status "open"
 //   Critical vulnerabilities = open vulns with severity "critical"
 //   Active incidents       = IncidentResponse rows with status
@@ -110,15 +128,18 @@
 //   There is NO agent-health / EDR-coverage field in the platform, so
 //   EDR coverage is NOT claimed; the card says so explicitly.
 //
-// OVERDUE REMEDIATION: omitted. No security model has a deadline
-// field. (Demo seed tucks a due_at into vulnerability attributes,
-// but that is seed-only synthetic data, absent on real rows — using
-// it would make the queue behave differently on demo vs real data.)
+// OVERDUE REMEDIATION: omitted as a computed value. No security model
+// has a deadline field. (Demo seed tucks a due_at into vulnerability
+// attributes, but that is seed-only synthetic data, absent on real
+// rows — using it would make the queue behave differently on demo vs
+// real data.) Remediation tracking shows status pipelines and age
+// buckets instead, and states plainly what cannot be tracked.
 //
 // SAMPLE-DATA PILL: shown when any fetched vulnerability, incident,
-// malware, DLP, or policy row has is_demo === true. Devices,
-// compliance, and alerts cannot contribute (no is_demo in their
-// list responses).
+// malware, DLP, policy, or device row has is_demo === true.
+// Devices, compliance, and alerts cannot contribute (no is_demo in
+// their list responses) — devices DO carry is_demo in DeviceOut,
+// so they contribute; compliance and alerts have no is_demo column.
 //
 // DATE RANGE: 7d / 30d / 90d filters the trend chart and the activity
 // timeline. KPIs are always the current snapshot.
@@ -126,24 +147,61 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import axios from 'axios'
 import {
-  ActivityTimeline,
-  AttentionQueue,
   BarChart,
   ChartContainer,
+  DetailDrawer,
   DonutChart,
   EmptyState,
   Icon,
-  KpiPanel,
   LineChart,
+  StatusBadge,
 } from '../components'
-import type { AttentionItem, AttentionSeverity, TimelineItem } from '../components'
-import type { BarDatum, DonutSegment } from '../components'
-import type { KpiTrend } from '../components'
+import type { BarDatum, DonutSegment, KpiTrend } from '../components'
+import { EndpointDetailDrawer } from '../components/EndpointDetailDrawer'
+import type { EndpointDeviceRecord } from '../components/EndpointDetailDrawer'
 import { NULL_COLORS } from '../theme'
+import { ActivityFeed } from './secops/ActivityFeed'
+import type { ActivityFeedItem } from './secops/ActivityFeed'
+import { AttackSurface } from './secops/AttackSurface'
+import { DrawerContent, drawerTitle } from './secops/DrawerViews'
+import type { DrawerView } from './secops/DrawerViews'
+import { IncidentTimeline } from './secops/IncidentTimeline'
+import { InvestigationQueue } from './secops/InvestigationQueue'
+import { PrioritizedVulns } from './secops/PrioritizedVulns'
+import { RemediationTracking } from './secops/RemediationTracking'
+import { SummaryPanels } from './secops/SummaryPanels'
+import {
+  DAY_MS,
+  RANGE_DAYS,
+  ageDays,
+  cvssOf,
+  departmentOf,
+  fmtDate,
+  fmtDay,
+  isSampleDevice,
+  normStatus,
+  osLabelOf,
+  parseDate,
+  severityOf,
+  timeOf,
+} from './secops/types'
+import type {
+  AlertRow,
+  ComplianceRow,
+  DeviceRow,
+  DlpRow,
+  IncidentRow,
+  MalwareRow,
+  PolicyRow,
+  RangeKey,
+  Severity,
+  VulnRow,
+} from './secops/types'
 
 export default function SecOpsHome(props: {
   api: string
   headers: Record<string, string>
+  userRole?: string
   onNavigate: (moduleId: string, subsectionId?: string) => void
 }): JSX.Element {
   const { onNavigate } = props
@@ -167,6 +225,11 @@ export default function SecOpsHome(props: {
   const [range, setRange] = useState<RangeKey>('30d')
   const [customizing, setCustomizing] = useState(false)
   const [sections, setSections] = useState<Record<SectionId, boolean>>(loadSections)
+  // Drill-down drawer stack (generic DetailDrawer) + the device
+  // drill-down (shared EndpointDetailDrawer). Device clicks never
+  // open the generic drawer — see openDevice below.
+  const [drawerStack, setDrawerStack] = useState<DrawerView[]>([])
+  const [endpointDevice, setEndpointDevice] = useState<DeviceRow | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -222,6 +285,26 @@ export default function SecOpsHome(props: {
     }
   }
 
+  /* ------------------------------------------------------------ drawers */
+  const openDrawer = useCallback((view: DrawerView) => setDrawerStack([view]), [])
+  const pushDrawer = useCallback((view: DrawerView) => setDrawerStack((s) => [...s, view]), [])
+  const closeDrawer = useCallback(() => setDrawerStack([]), [])
+  const backDrawer = useCallback(() => setDrawerStack((s) => s.slice(0, -1)), [])
+  // DEVICE DRILL-DOWN — every device click on this screen funnels
+  // through here into the shared EndpointDetailDrawer (live
+  // connectivity, hardware/OS, applications, linked vulns, command
+  // history + execution, WoL). The generic DetailDrawer never
+  // shows a device record.
+  // NOTE: SecOpsHome receives no user role, so canRunCommands is
+  // left false here — the drawer shows its owner/admin-only note.
+  // Passing the session role through from App.tsx would enable
+  // the command buttons for owner/admin.
+  const openDevice = useCallback((device: DeviceRow) => setEndpointDevice(device), [])
+  const closeEndpoint = useCallback(() => setEndpointDevice(null), [])
+  const endpointRecord: EndpointDeviceRecord | null = endpointDevice
+    ? { ...endpointDevice, device_id: endpointDevice.device_id ?? '' }
+    : null
+
   /* ------------------------------------------------------------ derived */
   const days = RANGE_DAYS[range]
   const now = lastUpdated ?? Date.now()
@@ -232,6 +315,14 @@ export default function SecOpsHome(props: {
     for (const d of devices) m.set(d.id, d)
     return m
   }, [devices])
+
+  const deviceOf = useCallback(
+    (deviceId: string | null | undefined): DeviceRow | undefined => {
+      if (!deviceId) return undefined
+      return deviceById.get(deviceId)
+    },
+    [deviceById],
+  )
 
   const hostnameOf = useCallback(
     (deviceId: string | null | undefined): string => {
@@ -291,6 +382,14 @@ export default function SecOpsHome(props: {
     () => malware.filter((m) => normStatus(m.status) === 'detected'),
     [malware],
   )
+  // False positives are not real detections: they are excluded from
+  // the quarantine-rate denominator (see SummaryPanels + coverage
+  // card) and footnoted wherever the rate is shown.
+  const falsePositiveMalware = useMemo(
+    () => malware.filter((m) => normStatus(m.status) === 'false-positive').length,
+    [malware],
+  )
+  const actionableMalware = malware.length - falsePositiveMalware
   const quarantinedMalware = useMemo(
     () =>
       malware.filter((m) => m.quarantined === true || ['quarantined', 'remediated'].includes(normStatus(m.status)))
@@ -330,6 +429,21 @@ export default function SecOpsHome(props: {
     return m
   }, [openVulns])
 
+  const highRiskDeviceRows = useMemo(
+    () =>
+      [...highRiskDevices.keys()]
+        .map((id) => deviceById.get(id))
+        .filter((d): d is DeviceRow => d !== undefined),
+    [highRiskDevices, deviceById],
+  )
+
+  // Distinct devices linked to ANY open vulnerability (attack surface).
+  const exposedDeviceRows = useMemo(() => {
+    const ids = new Set<string>()
+    for (const v of openVulns) if (v.device_id) ids.add(v.device_id)
+    return [...ids].map((id) => deviceById.get(id)).filter((d): d is DeviceRow => d !== undefined)
+  }, [openVulns, deviceById])
+
   const enrolledDevices = useMemo(
     () => devices.filter((d) => normStatus(d.enrollment_status) === 'enrolled'),
     [devices],
@@ -341,6 +455,15 @@ export default function SecOpsHome(props: {
       return t !== null && t >= cutoff
     }).length
   }, [enrolledDevices, now])
+  const reportingDeviceRows = useMemo(() => {
+    const cutoff = now - 24 * 60 * 60 * 1000
+    return enrolledDevices.filter((d) => {
+      const t = parseDate(d.last_checkin_at)
+      return t !== null && t >= cutoff
+    })
+  }, [enrolledDevices, now])
+
+  const liveDevices = useMemo(() => devices.filter((d) => !isSampleDevice(d)), [devices])
 
   const deptBars = useMemo<BarDatum[]>(() => {
     const counts = new Map<string, number>()
@@ -364,10 +487,30 @@ export default function SecOpsHome(props: {
       .sort((a, b) => b.value - a.value)
   }, [openVulns, deviceById])
 
+  // Devices carrying a department or OS attribute — the denominator
+  // for the "covers N of M endpoints" note under risk distribution.
+  const attributedDeviceCount = useMemo(
+    () => devices.filter((d) => departmentOf(d) !== null || osLabelOf(d) !== null).length,
+    [devices],
+  )
+
   const hasDemo = useMemo(
     () =>
-      [...vulns, ...incidents, ...malware, ...dlp, ...policies].some((r) => r.is_demo === true),
-    [vulns, incidents, malware, dlp, policies],
+      [...vulns, ...incidents, ...malware, ...dlp, ...policies, ...devices].some((r) => r.is_demo === true),
+    [vulns, incidents, malware, dlp, policies, devices],
+  )
+
+  const policyTypeCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const p of policies) {
+      const t = (p.policy_type || 'unspecified').trim()
+      counts.set(t, (counts.get(t) ?? 0) + 1)
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1])
+  }, [policies])
+  const activePolicies = useMemo(
+    () => policies.filter((p) => normStatus(p.status) === 'active').length,
+    [policies],
   )
 
   /* ------------------------------------------------------------ posture */
@@ -389,13 +532,19 @@ export default function SecOpsHome(props: {
       parts.push(`${critOpen.length} open critical ${critOpen.length === 1 ? 'vulnerability' : 'vulnerabilities'}`)
     if (activeIncidents.length > 0)
       parts.push(`${activeIncidents.length} active ${activeIncidents.length === 1 ? 'incident' : 'incidents'}`)
-    if (critDetectedMalware.length > 0)
-      parts.push(`${critDetectedMalware.length} unquarantined critical detection${critDetectedMalware.length === 1 ? '' : 's'}`)
+    // Detected malware is listed ONCE: the critical subset is folded
+    // into the same line (it used to appear twice — once as
+    // "unquarantined critical detections" and once inside
+    // "unquarantined malware detections").
+    if (detectedMalware.length > 0)
+      parts.push(
+        critDetectedMalware.length > 0
+          ? `${detectedMalware.length} unquarantined malware ${detectedMalware.length === 1 ? 'detection' : 'detections'} (${critDetectedMalware.length} critical)`
+          : `${detectedMalware.length} unquarantined malware ${detectedMalware.length === 1 ? 'detection' : 'detections'}`,
+      )
     if (highOpen.length > 0)
       parts.push(`${highOpen.length} open high ${highOpen.length === 1 ? 'vulnerability' : 'vulnerabilities'}`)
     if (openDlp.length > 0) parts.push(`${openDlp.length} open DLP ${openDlp.length === 1 ? 'finding' : 'findings'}`)
-    if (detectedMalware.length > 0)
-      parts.push(`${detectedMalware.length} unquarantined malware ${detectedMalware.length === 1 ? 'detection' : 'detections'}`)
     if (nonCompliant.length > 0)
       parts.push(`${nonCompliant.length} non-compliant ${nonCompliant.length === 1 ? 'assessment' : 'assessments'}`)
     return parts
@@ -406,6 +555,9 @@ export default function SecOpsHome(props: {
 
   /* ------------------------------------------------------------ trends */
   const trend = useMemo(() => bucketTrend(vulns, days, now), [vulns, days, now])
+  // Days covered by the oldest (remainder) weekly bucket — 30d → 2,
+  // 90d → 6, 7d → n/a (daily buckets). Shown in the trend subtitle.
+  const weeklyRemainder = days - 7 * (Math.ceil(days / 7) - 1)
   const vulnTrend = useMemo<KpiTrend | undefined>(() => {
     const inRange = vulns.filter((v) => {
       const t = timeOf(v)
@@ -419,119 +571,78 @@ export default function SecOpsHome(props: {
     const direction: 'up' | 'down' | 'flat' = inRange > inPrior ? 'up' : inRange < inPrior ? 'down' : 'flat'
     return { direction, value: `${inRange} new in last ${days}d`, good: direction !== 'up' }
   }, [vulns, rangeStart, days, now])
-  const critTrend = useMemo<KpiTrend | undefined>(() => {
-    const inRange = vulns.filter((v) => {
-      const t = timeOf(v)
-      return severityOf(v) === 'critical' && t !== null && t >= rangeStart && t <= now
-    }).length
-    const priorStart = rangeStart - days * DAY_MS
-    const inPrior = vulns.filter((v) => {
-      const t = timeOf(v)
-      return severityOf(v) === 'critical' && t !== null && t >= priorStart && t < rangeStart
-    }).length
-    const direction: 'up' | 'down' | 'flat' = inRange > inPrior ? 'up' : inRange < inPrior ? 'down' : 'flat'
-    return { direction, value: `${inRange} new critical in last ${days}d`, good: direction !== 'up' }
-  }, [vulns, rangeStart, days, now])
 
-  /* ------------------------------------------------------------ attention */
-  const attentionItems = useMemo<AttentionItem[]>(() => {
-    type Scored = { item: AttentionItem; rank: number; t: number }
-    const scored: Scored[] = []
-    const push = (item: AttentionItem, rank: number, t: number | null) =>
-      scored.push({ item, rank, t: t ?? 0 })
-    for (const v of openVulns) {
-      const sev = severityOf(v)
-      push(
-        {
-          id: `vuln-${v.id}`,
-          severity: sev === 'unknown' ? 'medium' : sev,
-          title: v.title || v.cve_id || 'Untitled vulnerability',
-          asset: [v.cve_id, hostnameOf(v.device_id)].filter(Boolean).join(' · ') || undefined,
-          status: `Open · CVSS ${cvssOf(v) ?? '—'}`,
-          time: timeOf(v) ? fmtDay(timeOf(v) as number) : undefined,
-          actionLabel: 'Review',
-          onAction: () => onNavigate('vulnerabilities', 'vulns'),
-        },
-        sev === 'critical' ? 0 : sev === 'high' ? 1 : sev === 'medium' ? 2 : 3,
-        timeOf(v),
-      )
-    }
-    for (const i of activeIncidents) {
-      push(
-        {
-          id: `incident-${i.id}`,
-          severity: 'high',
-          title: i.title || 'Untitled incident',
-          asset: hostnameOf(i.device_id) || undefined,
-          status: `${i.action || 'Response'} · ${i.status || 'active'}`,
-          time: timeOf(i) ? fmtDay(timeOf(i) as number) : undefined,
-          actionLabel: 'Respond',
-          onAction: () => onNavigate('edr', 'incidents'),
-        },
-        1,
-        timeOf(i),
-      )
-    }
-    for (const m of detectedMalware) {
-      const sev = severityOf(m)
-      push(
-        {
-          id: `malware-${m.id}`,
-          severity: sev === 'unknown' ? 'medium' : sev,
-          title: m.name ? `${m.name} detected` : m.title || 'Malware detection',
-          asset: hostnameOf(m.device_id) || undefined,
-          status: `${m.detection_layer || 'Detection'} · ${m.status || 'detected'}`,
-          time: timeOf(m) ? fmtDay(timeOf(m) as number) : undefined,
-          actionLabel: 'Quarantine',
-          onAction: () => onNavigate('malware'),
-        },
-        sev === 'critical' ? 0 : sev === 'high' ? 1 : sev === 'medium' ? 2 : 3,
-        timeOf(m),
-      )
-    }
-    for (const d of openDlp) {
-      const cls = (d.classification || '').toLowerCase()
-      const sev: AttentionSeverity = cls === 'restricted' ? 'high' : cls === 'internal' ? 'low' : 'medium'
-      push(
-        {
-          id: `dlp-${d.id}`,
-          severity: sev,
-          title: d.title || 'Sensitive data finding',
-          asset: hostnameOf(d.device_id) || d.location || undefined,
-          status: `${d.data_type || 'Data'} · ${d.classification || 'Unclassified'}`,
-          time: timeOf(d) ? fmtDay(timeOf(d) as number) : undefined,
-          actionLabel: 'Review',
-          onAction: () => onNavigate('dlp', 'findings'),
-        },
-        sev === 'high' ? 1 : sev === 'medium' ? 2 : 3,
-        timeOf(d),
-      )
-    }
-    for (const c of nonCompliant) {
-      push(
-        {
-          id: `compliance-${c.id}`,
-          severity: 'medium',
-          title: `${c.benchmark || 'Benchmark'} — ${hostnameOf(c.device_id) || 'endpoint'}`,
-          asset: undefined,
-          status: `Non-compliant · score ${c.score ?? '—'}`,
-          time: timeOf(c) ? fmtDay(timeOf(c) as number) : undefined,
-          actionLabel: 'View',
-          onAction: () => onNavigate('compliance'),
-        },
-        2,
-        timeOf(c),
-      )
-    }
-    return scored
-      .sort((a, b) => a.rank - b.rank || b.t - a.t)
-      .slice(0, 12)
-      .map((s) => s.item)
-  }, [openVulns, activeIncidents, detectedMalware, openDlp, nonCompliant, hostnameOf, onNavigate])
+  /* ------------------------------------------------------------ drawer openers */
+  const openVulnDrawer = useCallback(
+    (severity?: Severity) => {
+      const rows = severity ? openVulns.filter((v) => severityOf(v) === severity) : openVulns
+      openDrawer({
+        kind: 'vulns',
+        title: severity ? `Open vulnerabilities — ${severity}` : 'Open vulnerabilities',
+        rows,
+      })
+    },
+    [openVulns, openDrawer],
+  )
+
+  const openIncidentDrawer = useCallback(
+    (status?: 'active' | 'complete' | 'failed') => {
+      if (status === 'active')
+        return openDrawer({ kind: 'incidents', title: 'Active incidents', rows: activeIncidents })
+      if (status === 'complete')
+        return openDrawer({
+          kind: 'incidents',
+          title: 'Incidents — complete',
+          rows: incidents.filter((i) => normStatus(i.status) === 'complete'),
+        })
+      if (status === 'failed')
+        return openDrawer({
+          kind: 'incidents',
+          title: 'Incidents — failed',
+          rows: incidents.filter((i) => normStatus(i.status) === 'failed'),
+        })
+      return openDrawer({ kind: 'incidents', title: 'Incident response — all actions', rows: incidents })
+    },
+    [activeIncidents, incidents, openDrawer],
+  )
+
+  const openMalwareDrawer = useCallback(
+    () => openDrawer({ kind: 'malware', title: 'Malware detections', rows: malware }),
+    [malware, openDrawer],
+  )
+  const openDlpDrawer = useCallback(
+    () => openDrawer({ kind: 'dlp', title: 'DLP findings', rows: dlp }),
+    [dlp, openDrawer],
+  )
+  const openHighRiskDrawer = useCallback(
+    () =>
+      openDrawer({
+        kind: 'devices',
+        title: 'High-risk endpoints — open critical/high vulnerabilities',
+        rows: highRiskDeviceRows,
+      }),
+    [highRiskDeviceRows, openDrawer],
+  )
+  const openReportingDrawer = useCallback(
+    () =>
+      openDrawer({
+        kind: 'devices',
+        title: 'Endpoints reporting in last 24h',
+        rows: reportingDeviceRows,
+      }),
+    [reportingDeviceRows, openDrawer],
+  )
+  const openNewInRangeDrawer = useCallback(() => {
+    const rows = vulns.filter((v) => {
+      const t = timeOf(v)
+      return t !== null && t >= rangeStart && t <= now
+    })
+    openDrawer({ kind: 'vulns', title: `New vulnerabilities — last ${days} days`, rows })
+  }, [vulns, rangeStart, now, days, openDrawer])
 
   /* ------------------------------------------------------------ timeline */
-  const timelineItems = useMemo<TimelineItem[]>(() => {
-    type Ev = { item: TimelineItem; t: number }
+  const timelineItems = useMemo<ActivityFeedItem[]>(() => {
+    type Ev = { item: ActivityFeedItem; t: number }
     const events: Ev[] = []
     for (const v of vulns) {
       const t = timeOf(v)
@@ -545,6 +656,7 @@ export default function SecOpsHome(props: {
           title: v.cve_id ? `${v.cve_id} — ${v.title || 'Vulnerability'}` : v.title || 'Vulnerability discovered',
           detail: `Vulnerability · ${sev} · CVSS ${cvssOf(v) ?? '—'}${hostnameOf(v.device_id) ? ` · ${hostnameOf(v.device_id)}` : ''}`,
           tone: sev === 'critical' ? 'critical' : sev === 'high' ? 'warning' : sev === 'medium' ? 'info' : 'neutral',
+          view: { kind: 'vuln', row: v },
         },
       })
     }
@@ -561,6 +673,7 @@ export default function SecOpsHome(props: {
           detail: `Incident · ${i.action || 'response'} · ${i.status || ''}${hostnameOf(i.device_id) ? ` · ${hostnameOf(i.device_id)}` : ''}`,
           tone: s === 'failed' ? 'critical' : s === 'complete' ? 'success' : 'warning',
           actor: i.performed_by || undefined,
+          view: { kind: 'incident', row: i },
         },
       })
     }
@@ -584,6 +697,7 @@ export default function SecOpsHome(props: {
                 : sev === 'critical'
                   ? 'critical'
                   : 'warning',
+          view: { kind: 'malware-detection', row: m },
         },
       })
     }
@@ -599,6 +713,7 @@ export default function SecOpsHome(props: {
           title: d.title || 'Sensitive data finding',
           detail: `DLP · ${d.data_type || 'data'} · ${d.classification || 'unclassified'} · ${d.status || ''}${hostnameOf(d.device_id) ? ` · ${hostnameOf(d.device_id)}` : ''}`,
           tone: s === 'remediated' || s === 'encrypted' ? 'success' : s === 'accepted' ? 'neutral' : 'warning',
+          view: { kind: 'dlp-finding', row: d },
         },
       })
     }
@@ -644,6 +759,14 @@ export default function SecOpsHome(props: {
 
   /* ------------------------------------------------------------ report */
   const downloadReport = () => {
+    const openAgeBuckets = { under7: 0, sevenTo30: 0, over30: 0, undated: 0 }
+    for (const v of openVulns) {
+      const d = ageDays(timeOf(v), now)
+      if (d === null) openAgeBuckets.undated += 1
+      else if (d < 7) openAgeBuckets.under7 += 1
+      else if (d <= 30) openAgeBuckets.sevenTo30 += 1
+      else openAgeBuckets.over30 += 1
+    }
     const rows: Array<[string, string | number]> = [
       ['NULL Security Operations report', ''],
       ['Generated', new Date().toISOString()],
@@ -661,21 +784,37 @@ export default function SecOpsHome(props: {
       ['High vulnerabilities (open)', highOpen.length],
       ['Remediated vulnerabilities', remediatedVulns],
       ['Open vulnerabilities without a recorded severity', unclassifiedOpen],
+      ['Open vulnerabilities under 7 days old', openAgeBuckets.under7],
+      ['Open vulnerabilities 7–30 days old', openAgeBuckets.sevenTo30],
+      ['Open vulnerabilities over 30 days old', openAgeBuckets.over30],
+      ['Open vulnerabilities with no detection date', openAgeBuckets.undated],
       ['Active incidents (pending / in-progress)', activeIncidents.length],
       ['Incidents complete', completeIncidents],
       ['Incidents failed', failedIncidents],
       ['Malware detections (status detected)', detectedMalware.length],
       ['Malware detections (total)', malware.length],
+      ['Malware detections (false positives, excluded from quarantine rate)', falsePositiveMalware],
+      ['Malware detections (actionable)', actionableMalware],
       ['Malware quarantined', quarantinedMalware],
       ['DLP findings (open)', openDlp.length],
       ['DLP findings (total)', dlp.length],
       ['DLP findings closed (remediated / encrypted)', closedDlp],
-      ['Policy violations (non-compliant assessments)', nonCompliant.length],
+      ['DLP findings accepted (neither open nor closed)', dlp.length - openDlp.length - closedDlp],
+      [
+        'Policy violations (non-compliant assessments)',
+        compliance.length === 0 ? '— (no assessments recorded)' : nonCompliant.length,
+      ],
       ['Compliance assessments (total)', compliance.length],
+      ['Policies (total)', policies.length],
+      ['Policies active', activePolicies],
       ['High-risk endpoints (open critical/high vulns)', highRiskDevices.size],
+      ['Endpoints exposed (any open vulnerability)', exposedDeviceRows.length],
+      ['Endpoints in scope (total)', devices.length],
+      ['Endpoints live (not sample)', liveDevices.length],
       ['Endpoints enrolled', enrolledDevices.length],
       ['Endpoints reporting in last 24h', reporting24h],
       ['Mean time to remediate', 'Not computable — no resolution timestamps on vulnerability or incident records'],
+      ['Overdue remediation', 'Not computable — no deadline field on any security record'],
       ['', ''],
       ['Open vulnerabilities by severity', ''],
       ['Critical', severityCounts.critical],
@@ -733,6 +872,8 @@ export default function SecOpsHome(props: {
     )
   }
 
+  const activeDrawer = drawerStack.length > 0 ? drawerStack[drawerStack.length - 1] : null
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -756,7 +897,8 @@ export default function SecOpsHome(props: {
           </p>
           <p className="mt-0.5 text-xs text-null-muted dark:text-[#8AA0B8]">
             Last updated {lastUpdated ? fmtDate(lastUpdated) : '—'} · KPIs are current state; charts and activity
-            follow the selected range.
+            follow the selected range. Click any number, chart segment, queue row, or timeline entry to see the
+            underlying records.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -878,77 +1020,59 @@ export default function SecOpsHome(props: {
         </div>
       </section>
 
-      {/* KPI strip — severity first */}
+      {/* Summary band — four combined panels (replaces the old 8-card strip) */}
       {sections.kpis && (
-        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-          <KpiPanel
-            label="Critical vulnerabilities"
-            value={critOpen.length}
-            sublabel={`${totalCrit} critical total`}
-            trend={critTrend}
-            accent={critOpen.length > 0 ? 'critical' : 'success'}
-            onClick={() => onNavigate('vulnerabilities', 'vulns')}
-          />
-          <KpiPanel
-            label="Open vulnerabilities"
-            value={openVulns.length}
-            sublabel={`${vulns.length} total · ${remediatedVulns} remediated`}
-            trend={vulnTrend}
-            accent={openVulns.length > 0 ? 'warning' : 'success'}
-            onClick={() => onNavigate('vulnerabilities', 'vulns')}
-          />
-          <KpiPanel
-            label="Active incidents"
-            value={activeIncidents.length}
-            sublabel={`${completeIncidents} complete · ${failedIncidents} failed`}
-            accent={activeIncidents.length > 0 ? 'warning' : 'success'}
-            onClick={() => onNavigate('edr', 'incidents')}
-          />
-          <KpiPanel
-            label="Malware detections"
-            value={detectedMalware.length}
-            sublabel={`${malware.length} total · ${quarantinedMalware} quarantined`}
-            accent={detectedMalware.length > 0 ? 'critical' : 'success'}
-            onClick={() => onNavigate('malware')}
-          />
-          <KpiPanel
-            label="DLP findings"
-            value={openDlp.length}
-            sublabel={`${dlp.length} total · ${closedDlp} closed`}
-            accent={openDlp.length > 0 ? 'warning' : 'success'}
-            onClick={() => onNavigate('dlp', 'findings')}
-          />
-          <KpiPanel
-            label="Policy violations"
-            value={nonCompliant.length}
-            sublabel={`${compliance.length} assessments · ${benchmarkCount} benchmarks`}
-            accent={nonCompliant.length > 0 ? 'warning' : 'success'}
-            onClick={() => onNavigate('compliance')}
-          />
-          <KpiPanel
-            label="High-risk endpoints"
-            value={highRiskDevices.size}
-            sublabel={`of ${devices.length} endpoints · open critical/high vulns`}
-            accent={highRiskDevices.size > 0 ? 'warning' : 'success'}
-            onClick={() => onNavigate('devices')}
-          />
-          <KpiPanel
-            label="Mean time to remediate"
-            value="—"
-            sublabel="no resolution timestamps"
-            accent="neutral"
-          />
-        </div>
+        <SummaryPanels
+          openCount={openVulns.length}
+          totalCount={vulns.length}
+          severityCounts={severityCounts}
+          unclassifiedOpen={unclassifiedOpen}
+          remediatedCount={remediatedVulns}
+          trendSeries={trend.series}
+          trend={vulnTrend}
+          days={days}
+          activeIncidents={activeIncidents.length}
+          completeIncidents={completeIncidents}
+          failedIncidents={failedIncidents}
+          totalIncidents={incidents.length}
+          detectedMalware={detectedMalware.length}
+          actionableMalware={actionableMalware}
+          falsePositiveMalware={falsePositiveMalware}
+          quarantinedMalware={quarantinedMalware}
+          critDetectedMalware={critDetectedMalware.length}
+          openDlp={openDlp.length}
+          totalDlp={dlp.length}
+          closedDlp={closedDlp}
+          highRiskCount={highRiskDevices.size}
+          deviceCount={devices.length}
+          enrolledCount={enrolledDevices.length}
+          reporting24h={reporting24h}
+          onOpenVulns={openVulnDrawer}
+          onOpenIncidents={openIncidentDrawer}
+          onOpenMalware={openMalwareDrawer}
+          onOpenDlp={openDlpDrawer}
+          onOpenHighRiskDevices={openHighRiskDrawer}
+          onOpenReporting={openReportingDrawer}
+        />
       )}
 
-      {/* Severity-forward body: exposure + incidents left, risk + coverage right */}
+      {/* Row A — exposure left, investigation queue right */}
       <div className="grid gap-6 lg:grid-cols-12">
         <div className="space-y-6 lg:col-span-7">
           {sections.exposure && (
             <>
               <ChartContainer
                 title="Vulnerability exposure"
-                subtitle="Open vulnerabilities by severity — semantic color only on the severity indicators"
+                subtitle="Open vulnerabilities by severity — click a severity to see those records"
+                actions={
+                  <button
+                    type="button"
+                    onClick={() => openVulnDrawer()}
+                    className="text-xs font-medium text-null-teal hover:underline"
+                  >
+                    View all {openVulns.length} →
+                  </button>
+                }
               >
                 {openVulns.length === 0 ? (
                   <EmptyState
@@ -959,6 +1083,34 @@ export default function SecOpsHome(props: {
                 ) : (
                   <>
                     <DonutChart segments={donutSegments} centerLabel={String(openVulns.length)} />
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {(['critical', 'high', 'medium', 'low'] as const).map((sev) => (
+                        <button
+                          key={sev}
+                          type="button"
+                          onClick={() => openVulnDrawer(sev)}
+                          className="inline-flex items-center gap-1.5 rounded-full border border-null-line px-2.5 py-1 text-xs font-medium text-null-ink hover:bg-null-cloud dark:border-white/10 dark:text-white dark:hover:bg-null-navy2"
+                          title={`View open ${sev} vulnerabilities`}
+                        >
+                          <span
+                            className="inline-block h-2 w-2 rounded-full"
+                            style={{
+                              background:
+                                sev === 'critical'
+                                  ? NULL_COLORS.critical
+                                  : sev === 'high'
+                                    ? NULL_COLORS.warning
+                                    : sev === 'medium'
+                                      ? NULL_COLORS.info
+                                      : NULL_COLORS.muted,
+                            }}
+                            aria-hidden
+                          />
+                          <span className="capitalize">{sev}</span>
+                          <span className="text-null-muted dark:text-[#8AA0B8]">{severityCounts[sev]}</span>
+                        </button>
+                      ))}
+                    </div>
                     {unclassifiedOpen > 0 && (
                       <p className="mt-3 text-xs text-null-muted dark:text-[#8AA0B8]">
                         {unclassifiedOpen} open {unclassifiedOpen === 1 ? 'vulnerability has' : 'vulnerabilities have'}{' '}
@@ -974,7 +1126,18 @@ export default function SecOpsHome(props: {
                 subtitle={
                   days <= 7
                     ? 'New detections per day, from detected_at'
-                    : 'New detections per week, from detected_at'
+                    : weeklyRemainder === 7
+                      ? 'New detections per week, from detected_at'
+                      : `New detections per week, from detected_at — first bucket covers ${weeklyRemainder} days`
+                }
+                actions={
+                  <button
+                    type="button"
+                    onClick={openNewInRangeDrawer}
+                    className="text-xs font-medium text-null-teal hover:underline"
+                  >
+                    View new in range →
+                  </button>
                 }
               >
                 {trend.series.length < 2 || trend.series.every((v) => v === 0) ? (
@@ -991,43 +1154,54 @@ export default function SecOpsHome(props: {
               </ChartContainer>
             </>
           )}
+        </div>
 
-          {sections.incidents && (
+        <div className="space-y-6 lg:col-span-5">
+          {sections.attention && (
+            <div className="null-card" aria-label="Threat investigation">
+              <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+                <h3 className="text-sm font-semibold text-null-ink dark:text-white">Threat investigation</h3>
+                <span className="text-xs text-null-muted dark:text-[#8AA0B8]">ranked · click a row to investigate</span>
+              </div>
+              <InvestigationQueue
+                openVulns={openVulns}
+                detectedMalware={detectedMalware}
+                activeIncidents={activeIncidents}
+                openDlp={openDlp}
+                hostnameOf={hostnameOf}
+                onOpenView={openDrawer}
+                now={now}
+              />
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Row B — prioritization left, risk + coverage right */}
+      <div className="grid gap-6 lg:grid-cols-12">
+        <div className="space-y-6 lg:col-span-7">
+          {sections.prioritization && (
             <ChartContainer
-              title="Incident response"
-              subtitle="Containment actions by outcome — pending / in-progress counts as open"
+              title="Vulnerability prioritization"
+              subtitle="Ranked fix list — severity, then CVSS, then oldest first"
+              actions={
+                <button
+                  type="button"
+                  onClick={() => openVulnDrawer()}
+                  className="text-xs font-medium text-null-teal hover:underline"
+                >
+                  View all open →
+                </button>
+              }
             >
-              {incidents.length === 0 ? (
-                <EmptyState
-                  icon="alert-triangle"
-                  title="No incidents recorded"
-                  description="No incident-response actions exist yet. Containment work will appear here by outcome."
-                />
-              ) : (
-                <>
-                  <div className="h-40">
-                    <BarChart bars={incidentBars} />
-                  </div>
-                  <div className="mt-4 border-t border-null-line pt-4 dark:border-white/10">
-                    <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-null-muted dark:text-[#8AA0B8]">
-                      Alert severity (all categories)
-                    </h4>
-                    {alerts.length === 0 ? (
-                      <EmptyState
-                        icon="search"
-                        title="No alerts recorded"
-                        description="The alert record — the detection behind an incident — is empty, so there is no severity breakdown to show."
-                      />
-                    ) : (
-                      <DonutChart segments={alertDonut} centerLabel={String(alerts.length)} size={140} />
-                    )}
-                    <p className="mt-2 text-xs text-null-muted dark:text-[#8AA0B8]">
-                      Incidents don&apos;t carry a severity of their own — this breakdown comes from their
-                      related alerts.
-                    </p>
-                  </div>
-                </>
-              )}
+              <PrioritizedVulns
+                openVulns={openVulns}
+                hostnameOf={hostnameOf}
+                deviceOf={deviceOf}
+                onOpenView={openDrawer}
+                onOpenDevice={openDevice}
+                now={now}
+              />
             </ChartContainer>
           )}
         </div>
@@ -1037,6 +1211,21 @@ export default function SecOpsHome(props: {
             <ChartContainer
               title="Risk distribution"
               subtitle="Open vulnerabilities grouped by the linked endpoint's department and OS"
+              actions={
+                <button
+                  type="button"
+                  onClick={() =>
+                    openDrawer({
+                      kind: 'devices',
+                      title: 'Exposed endpoints — open vulnerabilities',
+                      rows: exposedDeviceRows,
+                    })
+                  }
+                  className="text-xs font-medium text-null-teal hover:underline"
+                >
+                  View exposed endpoints →
+                </button>
+              }
             >
               {deptBars.length === 0 && osBars.length === 0 ? (
                 <EmptyState
@@ -1071,6 +1260,10 @@ export default function SecOpsHome(props: {
                       aren&apos;t shown.
                     </p>
                   )}
+                  <p className="border-t border-null-line pt-3 text-xs leading-relaxed text-null-muted dark:border-white/10 dark:text-[#8AA0B8]">
+                    Covers {attributedDeviceCount} of {devices.length} endpoints — department and OS are recorded
+                    only on sample endpoints. Live endpoints are counted in fleet totals but cannot appear here.
+                  </p>
                 </div>
               )}
             </ChartContainer>
@@ -1093,93 +1286,232 @@ export default function SecOpsHome(props: {
               ) : (
                 <ul className="mt-4 space-y-4 text-sm">
                   <li>
-                    <div className="flex items-baseline justify-between gap-2">
-                      <span className="font-medium text-null-ink dark:text-white">
-                        Endpoints reporting in last 24h
+                    <button type="button" onClick={openReportingDrawer} className="block w-full text-left" title="View reporting endpoints">
+                      <span className="flex items-baseline justify-between gap-2">
+                        <span className="font-medium text-null-ink dark:text-white">
+                          Endpoints reporting in last 24h
+                        </span>
+                        <span className="font-semibold text-null-ink dark:text-white">
+                          {reporting24h} of {enrolledDevices.length} enrolled
+                        </span>
                       </span>
-                      <span className="font-semibold text-null-ink dark:text-white">
-                        {reporting24h} of {enrolledDevices.length} enrolled
+                      <span className="mt-1.5 block h-2 overflow-hidden rounded bg-null-cloud dark:bg-null-navy2">
+                        <span
+                          className="block h-full rounded bg-null-teal"
+                          style={{
+                            width: `${enrolledDevices.length > 0 ? Math.round((reporting24h / enrolledDevices.length) * 100) : 0}%`,
+                          }}
+                        />
                       </span>
-                    </div>
-                    <div className="mt-1.5 h-2 overflow-hidden rounded bg-null-cloud dark:bg-null-navy2">
-                      <div
-                        className="h-full rounded bg-null-teal"
-                        style={{
-                          width: `${enrolledDevices.length > 0 ? Math.round((reporting24h / enrolledDevices.length) * 100) : 0}%`,
-                        }}
-                      />
-                    </div>
+                    </button>
                   </li>
                   <li>
-                    <div className="flex items-baseline justify-between gap-2">
-                      <span className="font-medium text-null-ink dark:text-white">Malware quarantined</span>
-                      <span className="font-semibold text-null-ink dark:text-white">
-                        {quarantinedMalware} of {malware.length}
+                    <button type="button" onClick={openMalwareDrawer} className="block w-full text-left" title="View malware detections">
+                      <span className="flex items-baseline justify-between gap-2">
+                        <span className="font-medium text-null-ink dark:text-white">Malware quarantined</span>
+                        <span className="font-semibold text-null-ink dark:text-white">
+                          {quarantinedMalware} of {actionableMalware}
+                        </span>
                       </span>
-                    </div>
-                    <div className="mt-1.5 h-2 overflow-hidden rounded bg-null-cloud dark:bg-null-navy2">
-                      <div
-                        className="h-full rounded bg-null-teal"
-                        style={{
-                          width: `${malware.length > 0 ? Math.round((quarantinedMalware / malware.length) * 100) : 0}%`,
-                        }}
-                      />
-                    </div>
+                      <span className="mt-1.5 block h-2 overflow-hidden rounded bg-null-cloud dark:bg-null-navy2">
+                        <span
+                          className="block h-full rounded bg-null-teal"
+                          style={{
+                            width: `${actionableMalware > 0 ? Math.round((quarantinedMalware / actionableMalware) * 100) : 0}%`,
+                          }}
+                        />
+                      </span>
+                    </button>
                   </li>
                   <li>
-                    <div className="flex items-baseline justify-between gap-2">
-                      <span className="font-medium text-null-ink dark:text-white">DLP findings closed</span>
-                      <span className="font-semibold text-null-ink dark:text-white">
-                        {closedDlp} of {dlp.length}
+                    <button type="button" onClick={openDlpDrawer} className="block w-full text-left" title="View DLP findings">
+                      <span className="flex items-baseline justify-between gap-2">
+                        <span className="font-medium text-null-ink dark:text-white">DLP findings closed</span>
+                        <span className="font-semibold text-null-ink dark:text-white">
+                          {closedDlp} of {dlp.length}
+                        </span>
                       </span>
-                    </div>
-                    <div className="mt-1.5 h-2 overflow-hidden rounded bg-null-cloud dark:bg-null-navy2">
-                      <div
-                        className="h-full rounded bg-null-teal"
-                        style={{
-                          width: `${dlp.length > 0 ? Math.round((closedDlp / dlp.length) * 100) : 0}%`,
-                        }}
-                      />
-                    </div>
+                      <span className="mt-1.5 block h-2 overflow-hidden rounded bg-null-cloud dark:bg-null-navy2">
+                        <span
+                          className="block h-full rounded bg-null-teal"
+                          style={{
+                            width: `${dlp.length > 0 ? Math.round((closedDlp / dlp.length) * 100) : 0}%`,
+                          }}
+                        />
+                      </span>
+                    </button>
                   </li>
                 </ul>
               )}
               <p className="mt-4 text-xs leading-relaxed text-null-muted dark:text-[#8AA0B8]">
                 These measure check-in recency and closure outcomes. They don&apos;t show whether every endpoint
-                is protected — protection coverage isn&apos;t tracked here.
+                is protected — protection coverage isn&apos;t tracked here. {enrolledDevices.length} enrolled of{' '}
+                {devices.length} endpoints in scope — {devices.length - enrolledDevices.length} suspended
+                excluded. {falsePositiveMalware} false-positive {falsePositiveMalware === 1 ? 'detection is' : 'detections are'}{' '}
+                excluded from the quarantine rate. {dlp.length - openDlp.length - closedDlp} DLP{' '}
+                {dlp.length - openDlp.length - closedDlp === 1 ? 'finding is' : 'findings are'} accepted —
+                neither open nor closed.
               </p>
             </div>
           )}
         </div>
       </div>
 
-      {/* Attention queue + activity timeline */}
+      {/* Row C — incidents + timeline left, attack surface right */}
       <div className="grid gap-6 lg:grid-cols-12">
-        {sections.attention && (
-          <div className="null-card lg:col-span-7" aria-label="Needs attention">
-            <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
-              <h3 className="text-sm font-semibold text-null-ink dark:text-white">Needs attention</h3>
-              <span className="text-xs text-null-muted dark:text-[#8AA0B8]">
-                {attentionItems.length > 0 ? `${attentionItems.length} most severe first` : ''}
-              </span>
-            </div>
-            {attentionItems.length === 0 ? (
-              <EmptyState
-                icon="check-circle"
-                title="Nothing needs attention"
-                description="No open critical or high vulnerabilities, active incidents, unquarantined detections, open DLP findings, or non-compliant assessments."
+        <div className="space-y-6 lg:col-span-7">
+          {sections.incidents && (
+            <ChartContainer
+              title="Incident response"
+              subtitle="Containment actions by outcome — pending / in-progress counts as open"
+              actions={
+                <button
+                  type="button"
+                  onClick={() => openIncidentDrawer()}
+                  className="text-xs font-medium text-null-teal hover:underline"
+                >
+                  View all {incidents.length} →
+                </button>
+              }
+            >
+              {incidents.length === 0 ? (
+                <EmptyState
+                  icon="alert-triangle"
+                  title="No incidents recorded"
+                  description="No incident-response actions exist yet. Containment work will appear here by outcome."
+                />
+              ) : (
+                <>
+                  <div className="h-40">
+                    <BarChart bars={incidentBars} />
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => openIncidentDrawer('active')}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-null-line px-2.5 py-1 text-xs font-medium text-null-ink hover:bg-null-cloud dark:border-white/10 dark:text-white dark:hover:bg-null-navy2"
+                      title="View open incidents"
+                    >
+                      <span className="inline-block h-2 w-2 rounded-full" style={{ background: NULL_COLORS.warning }} aria-hidden />
+                      Open {activeIncidents.length}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openIncidentDrawer('complete')}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-null-line px-2.5 py-1 text-xs font-medium text-null-ink hover:bg-null-cloud dark:border-white/10 dark:text-white dark:hover:bg-null-navy2"
+                      title="View complete incidents"
+                    >
+                      <span className="inline-block h-2 w-2 rounded-full" style={{ background: NULL_COLORS.success }} aria-hidden />
+                      Resolved {completeIncidents}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openIncidentDrawer('failed')}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-null-line px-2.5 py-1 text-xs font-medium text-null-ink hover:bg-null-cloud dark:border-white/10 dark:text-white dark:hover:bg-null-navy2"
+                      title="View failed incidents"
+                    >
+                      <span className="inline-block h-2 w-2 rounded-full" style={{ background: NULL_COLORS.critical }} aria-hidden />
+                      Failed {failedIncidents}
+                    </button>
+                  </div>
+                  <div className="mt-4 border-t border-null-line pt-4 dark:border-white/10">
+                    <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+                      <h4 className="text-xs font-semibold uppercase tracking-wide text-null-muted dark:text-[#8AA0B8]">
+                        Alert severity (all categories)
+                      </h4>
+                      {alerts.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => openDrawer({ kind: 'alerts', title: 'Security alerts', rows: alerts })}
+                          className="text-xs font-medium text-null-teal hover:underline"
+                        >
+                          View {alerts.length} alerts →
+                        </button>
+                      )}
+                    </div>
+                    {alerts.length === 0 ? (
+                      <EmptyState
+                        icon="search"
+                        title="No alerts recorded"
+                        description="The alert record — the detection behind an incident — is empty, so there is no severity breakdown to show."
+                      />
+                    ) : (
+                      <DonutChart segments={alertDonut} centerLabel={String(alerts.length)} size={140} />
+                    )}
+                    <p className="mt-2 text-xs text-null-muted dark:text-[#8AA0B8]">
+                      Incidents don&apos;t carry a severity of their own — this breakdown comes from their
+                      related alerts.
+                    </p>
+                  </div>
+                </>
+              )}
+            </ChartContainer>
+          )}
+
+          {sections.incidentTimeline && (
+            <ChartContainer
+              title="Incident response timeline"
+              subtitle="Containment actions, newest first — click an entry for its record"
+            >
+              <IncidentTimeline
+                incidents={incidents}
+                hostnameOf={hostnameOf}
+                deviceOf={deviceOf}
+                onOpenView={openDrawer}
+                onOpenDevice={openDevice}
+                alertsRecorded={alerts.length > 0}
+                now={now}
               />
-            ) : (
-              <AttentionQueue items={attentionItems} />
-            )}
-          </div>
-        )}
+            </ChartContainer>
+          )}
+        </div>
+
+        <div className="space-y-6 lg:col-span-5">
+          {sections.attack && (
+            <ChartContainer
+              title="Attack surface"
+              subtitle="What is exposed, from device and vulnerability records"
+            >
+              <AttackSurface
+                devices={devices}
+                openVulns={openVulns}
+                hostnameOf={hostnameOf}
+                deviceOf={deviceOf}
+                onOpenView={openDrawer}
+                onOpenDevice={openDevice}
+              />
+            </ChartContainer>
+          )}
+        </div>
+      </div>
+
+      {/* Row D — remediation tracking, full width */}
+      {sections.remediation && (
+        <ChartContainer
+          title="Remediation tracking"
+          subtitle="Where every open item stands — status pipelines and age. Click a segment to see those records."
+        >
+          <RemediationTracking
+            vulns={vulns}
+            incidents={incidents}
+            malware={malware}
+            dlp={dlp}
+            compliance={compliance}
+            alerts={alerts}
+            now={now}
+            onOpenView={openDrawer}
+          />
+        </ChartContainer>
+      )}
+
+      {/* Row E — security activity + policies */}
+      <div className="grid gap-6 lg:grid-cols-12">
         {sections.activity && (
-          <div className="null-card lg:col-span-5" aria-label="Security activity">
+          <div className="null-card lg:col-span-7" aria-label="Security activity">
             <div className="mb-3">
               <h3 className="text-sm font-semibold text-null-ink dark:text-white">Security activity</h3>
               <p className="mt-0.5 text-xs text-null-muted dark:text-[#8AA0B8]">
-                Latest 15 · last {days} days · newest first
+                Latest 15 · last {days} days · newest first · click an entry to open its record
               </p>
             </div>
             {timelineItems.length === 0 ? (
@@ -1189,119 +1521,129 @@ export default function SecOpsHome(props: {
                 description={`Nothing was detected, contained, or found in the last ${days} days. Widen the range to see older activity.`}
               />
             ) : (
-              <ActivityTimeline items={timelineItems} />
+              <ActivityFeed items={timelineItems} onOpenView={openDrawer} />
             )}
           </div>
         )}
+        {sections.policies && (
+          <div className="null-card lg:col-span-5" aria-label="Policies and compliance">
+            <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+              <h3 className="text-sm font-semibold text-null-ink dark:text-white">Policies & compliance</h3>
+              <span className="text-xs text-null-muted dark:text-[#8AA0B8]">
+                {policies.length} policies · {activePolicies} active
+              </span>
+            </div>
+            {policies.length === 0 ? (
+              <EmptyState
+                icon="file-text"
+                title="No policies defined"
+                description="No policy definitions exist yet. Policies define the rules; violations are tracked through compliance assessments."
+              />
+            ) : (
+              <ul className="space-y-1.5">
+                {[...policies]
+                  .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+                  .map((p) => (
+                    <li key={p.id}>
+                      <button
+                        type="button"
+                        onClick={() => openDrawer({ kind: 'policy', row: p })}
+                        className="flex w-full items-center justify-between gap-2 rounded-lg border border-null-line px-3 py-2 text-left hover:bg-null-cloud dark:border-white/10 dark:hover:bg-null-navy2"
+                        title="Open policy detail"
+                      >
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm font-medium text-null-ink dark:text-white">
+                            {p.name || 'Unnamed policy'}
+                          </span>
+                          <span className="block text-xs text-null-muted dark:text-[#8AA0B8]">
+                            {p.policy_type || 'unspecified'}
+                          </span>
+                        </span>
+                        <StatusBadge value={p.status} size="sm" />
+                      </button>
+                    </li>
+                  ))}
+              </ul>
+            )}
+            <div className="mt-4 border-t border-null-line pt-3 dark:border-white/10">
+              <p className="text-xs leading-relaxed text-null-muted dark:text-[#8AA0B8]">
+                {compliance.length === 0 ? (
+                  <>
+                    No compliance assessments recorded — policy violations (non-compliant assessments) cannot be
+                    tracked until assessments exist. There is no violation record type.
+                  </>
+                ) : (
+                  <>
+                    {compliance.length} {compliance.length === 1 ? 'assessment' : 'assessments'} ·{' '}
+                    {nonCompliant.length} non-compliant · {benchmarkCount}{' '}
+                    {benchmarkCount === 1 ? 'benchmark' : 'benchmarks'}.{' '}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        openDrawer({ kind: 'compliance', title: 'Non-compliant assessments', rows: nonCompliant })
+                      }
+                      className="font-medium text-null-teal hover:underline"
+                    >
+                      View non-compliant →
+                    </button>
+                  </>
+                )}
+              </p>
+              {policyTypeCounts.length > 0 && (
+                <p className="mt-2 text-xs text-null-muted dark:text-[#8AA0B8]">
+                  By type: {policyTypeCounts.map(([t, n]) => `${t} ${n}`).join(' · ')}
+                </p>
+              )}
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* Drill-down drawers */}
+      {activeDrawer && (
+        <DetailDrawer open onClose={closeDrawer} title={drawerTitle(activeDrawer)}>
+          <DrawerContent
+            view={activeDrawer}
+            onOpenView={pushDrawer}
+            onBack={drawerStack.length > 1 ? backDrawer : null}
+            onOpenDevice={openDevice}
+            onNavigate={onNavigate}
+            hostnameOf={hostnameOf}
+            deviceOf={deviceOf}
+            now={now}
+          />
+        </DetailDrawer>
+      )}
+      <EndpointDetailDrawer
+        open={endpointDevice !== null}
+        device={endpointRecord}
+        api={props.api}
+        headers={props.headers}
+        canRunCommands={props.userRole === 'owner' || props.userRole === 'admin'}
+        userRole={props.userRole}
+        onClose={closeEndpoint}
+      />
     </div>
   )
 }
 
 /* ------------------------------------------------------------------ types */
 
-type RangeKey = '7d' | '30d' | '90d'
-const RANGE_DAYS: Record<RangeKey, number> = { '7d': 7, '30d': 30, '90d': 90 }
-const DAY_MS = 24 * 60 * 60 * 1000
-
-type VulnRow = {
-  id: string
-  cve_id?: string | null
-  title?: string | null
-  severity?: string | null
-  cvss_score?: string | number | null
-  status?: string | null
-  device_id?: string | null
-  is_demo?: boolean
-  attributes?: Record<string, unknown> | null
-  detected_at?: string | null
-  created_at?: string | null
-}
-
-type IncidentRow = {
-  id: string
-  device_id?: string | null
-  title?: string | null
-  action?: string | null
-  status?: string | null
-  performed_by?: string | null
-  is_demo?: boolean
-  created_at?: string | null
-}
-
-type MalwareRow = {
-  id: string
-  device_id?: string | null
-  title?: string | null
-  name?: string | null
-  detection_layer?: string | null
-  severity?: string | null
-  quarantined?: boolean | null
-  status?: string | null
-  is_demo?: boolean
-  created_at?: string | null
-}
-
-type DlpRow = {
-  id: string
-  device_id?: string | null
-  title?: string | null
-  location?: string | null
-  data_type?: string | null
-  classification?: string | null
-  status?: string | null
-  is_demo?: boolean
-  created_at?: string | null
-}
-
-type AlertRow = {
-  id: string
-  device_id?: string | null
-  title?: string | null
-  severity?: string | null
-  category?: string | null
-  status?: string | null
-  created_at?: string | null
-}
-
-type ComplianceRow = {
-  id: string
-  device_id?: string | null
-  benchmark?: string | null
-  score?: string | null
-  status?: string | null
-  assessed_at?: string | null
-}
-
-type PolicyRow = {
-  id: string
-  name?: string | null
-  policy_type?: string | null
-  status?: string | null
-  is_demo?: boolean
-  created_at?: string | null
-}
-
-type DeviceRow = {
-  id: string
-  hostname?: string | null
-  device_id?: string | null
-  enrollment_status?: string | null
-  agent_version?: string | null
-  last_checkin_at?: string | null
-  attributes?: Record<string, unknown> | null
-}
-
 type Posture = 'Elevated' | 'Guarded' | 'Stable'
 
 const SECTIONS = [
-  { id: 'kpis', label: 'KPI strip' },
+  { id: 'kpis', label: 'Summary band' },
   { id: 'exposure', label: 'Vulnerability exposure' },
+  { id: 'prioritization', label: 'Vulnerability prioritization' },
+  { id: 'incidents', label: 'Incident response' },
+  { id: 'incidentTimeline', label: 'Incident timeline' },
+  { id: 'attention', label: 'Threat investigation' },
   { id: 'risk', label: 'Risk distribution' },
   { id: 'coverage', label: 'Protection coverage' },
-  { id: 'incidents', label: 'Incident response' },
-  { id: 'attention', label: 'Attention queue' },
+  { id: 'attack', label: 'Attack surface' },
+  { id: 'remediation', label: 'Remediation tracking' },
   { id: 'activity', label: 'Security activity' },
+  { id: 'policies', label: 'Policies & compliance' },
 ] as const
 
 type SectionId = (typeof SECTIONS)[number]['id']
@@ -1325,104 +1667,6 @@ function loadSections(): Record<SectionId, boolean> {
 
 /* ------------------------------------------------------------------ helpers */
 
-function normStatus(status: string | null | undefined): string {
-  return (status || '').trim().toLowerCase()
-}
-
-function cvssOf(row: { cvss_score?: string | number | null }): number | null {
-  const raw = row.cvss_score
-  if (typeof raw === 'number' && Number.isFinite(raw)) return raw
-  if (typeof raw === 'string' && raw.trim() !== '') {
-    const n = parseFloat(raw)
-    return Number.isFinite(n) ? n : null
-  }
-  return null
-}
-
-type Severity = 'critical' | 'high' | 'medium' | 'low' | 'unknown'
-
-function severityOf(row: { severity?: string | null; cvss_score?: string | number | null }): Severity {
-  const s = (row.severity || '').trim().toLowerCase()
-  if (s === 'critical' || s === 'p1') return 'critical'
-  if (s === 'high' || s === 'important' || s === 'p2') return 'high'
-  if (s === 'medium' || s === 'moderate' || s === 'p3') return 'medium'
-  if (s === 'low' || s === 'p4') return 'low'
-  const cvss = cvssOf(row)
-  if (cvss !== null) {
-    if (cvss >= 9) return 'critical'
-    if (cvss >= 7) return 'high'
-    if (cvss >= 4) return 'medium'
-    return 'low'
-  }
-  return 'unknown'
-}
-
-function parseDate(value: string | null | undefined): number | null {
-  if (!value) return null
-  // Backend datetimes are naive UTC (no zone designator). Treat them
-  // as UTC so toLocaleString() renders them in the viewer's local
-  // timezone instead of misreading them as already-local.
-  const v = value.includes('T') && !/[Zz]$|[+-]\d{2}:?\d{2}$/.test(value) ? `${value}Z` : value
-  const t = Date.parse(v)
-  return Number.isFinite(t) ? t : null
-}
-
-function timeOf(row: {
-  detected_at?: string | null
-  created_at?: string | null
-  assessed_at?: string | null
-}): number | null {
-  return parseDate(row.detected_at) ?? parseDate(row.created_at) ?? parseDate(row.assessed_at)
-}
-
-function fmtDate(t: number): string {
-  return new Date(t).toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  })
-}
-
-function fmtDay(t: number): string {
-  return new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-}
-
-function departmentOf(device: DeviceRow | undefined): string | null {
-  if (!device || !device.attributes) return null
-  const dept = device.attributes.department
-  return typeof dept === 'string' && dept.trim() !== '' ? dept.trim() : null
-}
-
-/** OS label for a device. Follows the IT Ops convention: an object
- *  attributes.os reads .platform (darwin/windows/linux); a string
- *  attributes.os is shown as-is — except a broken "macOS <nil>"
- *  version string is never displayed (trimmed to "macOS"). */
-function osLabelOf(device: DeviceRow | undefined): string | null {
-  if (!device || !device.attributes) return null
-  const os = device.attributes.os
-  if (os && typeof os === 'object') {
-    const platform = (os as Record<string, unknown>).platform
-    if (typeof platform !== 'string' || platform.trim() === '') return null
-    switch (platform.toLowerCase()) {
-      case 'darwin':
-        return 'macOS'
-      case 'windows':
-        return 'Windows'
-      case 'linux':
-        return 'Linux'
-      default:
-        return platform
-    }
-  }
-  if (typeof os === 'string' && os.trim() !== '') {
-    const cleaned = os.replace(/\s*<nil>.*$/, '').trim()
-    return cleaned === '' ? null : cleaned
-  }
-  return null
-}
-
 function bucketTrend(rows: VulnRow[], days: number, now: number): { series: number[]; labels: string[] } {
   const start = now - days * DAY_MS
   if (days <= 7) {
@@ -1437,14 +1681,27 @@ function bucketTrend(rows: VulnRow[], days: number, now: number): { series: numb
     }
     return { series, labels }
   }
+  // Weekly buckets, aligned exactly to the range: the OLDEST bucket
+  // takes the remainder (30d → 2 days, 90d → 6 days), so no bucket
+  // reaches outside the labelled range.
   const buckets = Math.ceil(days / 7)
+  const widths = [days - 7 * (buckets - 1), ...Array.from({ length: buckets - 1 }, () => 7)]
   const series = Array.from({ length: buckets }, () => 0)
   const labels: string[] = []
-  for (let i = 0; i < buckets; i++) labels.push(fmtDay(start + i * 7 * DAY_MS))
+  let cursor = start
+  for (let i = 0; i < buckets; i++) {
+    labels.push(fmtDay(cursor))
+    cursor += widths[i] * DAY_MS
+  }
   for (const r of rows) {
     const t = timeOf(r)
     if (t === null || t < start || t > now) continue
-    const idx = Math.min(Math.floor((t - start) / (7 * DAY_MS)), buckets - 1)
+    let offset = t - start
+    let idx = 0
+    while (idx < buckets - 1 && offset >= widths[idx] * DAY_MS) {
+      offset -= widths[idx] * DAY_MS
+      idx += 1
+    }
     series[idx] += 1
   }
   return { series, labels }

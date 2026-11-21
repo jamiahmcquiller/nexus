@@ -28,6 +28,7 @@ from .routers import (
     patching, vulnops, edr, malware, browser, appcontrol, dlp, access,
     assets, distribution, dex, remote, imaging, configmgmt, mdm,
     encryption, servers, reporting, scheduler, grc, agent, demo,
+    remediation_configs,
 )
 
 # Create tables
@@ -83,6 +84,7 @@ app.include_router(scheduler.router)
 app.include_router(grc.router)
 app.include_router(agent.router)
 app.include_router(demo.router)
+app.include_router(remediation_configs.router)
 
 @app.get("/")
 async def root():

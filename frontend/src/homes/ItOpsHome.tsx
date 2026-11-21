@@ -1,79 +1,125 @@
-// NULL — IT Operations home dashboard.
+// NULL — IT Operations home dashboard (refinement, not a rebuild).
 //
-// Every number on this screen is computed client-side from live API
-// lists (devices, patches, patch deployments, servers). Nothing is
-// fabricated: a series with no underlying rows renders an EmptyState,
-// not zeros dressed up as a trend.
+// Composition: a fleet-health command strip (health donut + patch
+// posture) up top, then infrastructure (servers + endpoint groups),
+// then the deployment pipeline + operational workload, then the
+// needs-attention queue and recent activity. Every number is
+// computed client-side from the same live API lists the drill-downs
+// open — charts, KPIs and queue rows never disagree about a count.
 //
 // ── Data formulas (the contract — change these only deliberately) ──
 //
-// ENDPOINT HEALTH (from GET /api/v1/devices/; DeviceOut rows carry
-// enrollment_status, last_checkin_at and attributes — but NOT
-// created_at and NOT is_demo, so devices cannot feed the enrollment
-// trend by created_at nor the sample-data pill):
-//   online     = enrollment_status "enrolled" AND last_checkin_at
-//                within the last 1h (same 1h threshold the backend's
-//                /api/v1/devices/stats "online" count uses)
+// ENDPOINT HEALTH (from GET /api/v1/devices/; DeviceOut DOES carry
+// is_demo and created_at — an earlier comment here claimed it did
+// not; that was wrong. Enrollment trend still buckets on
+// attributes.collected, because the demo seed stamps created_at
+// ~30 days before the staggered first-seen dates):
+//   online     = enrolled AND last_checkin_at within the last 1h
+//                (same enrolled + 1h rule the backend's
+//                /devices/stats "online" count uses)
 //   attention  = enrolled AND last_checkin_at between 1h and 24h ago
-//                (checking in, but stale)
 //   offline    = enrolled AND last_checkin_at older than 24h, or never
 //   degraded   = enrollment_status "suspended"
-//   decommissioned devices are NOT in the fleet and are excluded from
-//   the donut entirely.
+//   decommissioned devices are NOT in the fleet and are excluded
+//   from the donut, the group breakdowns and the totals entirely.
+//   Health is a CHECK-IN measure only: it says nothing about CPU,
+//   disk, or patch state. Sample check-ins are a fixed snapshot
+//   from seeding — nothing re-checks in — so the online count
+//   falls as wall-clock time passes. That is expected, not a bug.
+//
+// LIVE vs SAMPLE: a device is live when is_demo === false (the
+// seed only ever creates device_ids starting with "demo-"; the
+// real Mac, darwin-ac913e0958751651, is the only live row). Live
+// endpoints get a Live badge and a permanent spotlight row; they
+// are never hidden inside a bucket, even when stale — the agent
+// reports when it runs, it is not continuously online, so a
+// check-in hours old is expected, not a fault.
 //
 // PATCH COMPLIANCE % (from GET /api/v1/patches/):
 //   deployed / (deployed + available + testing + approved)
-//   Declined patches are excluded from the denominator. There is no
-//   "failed" patch status in the backend (patch statuses are
-//   available / testing / approved / declined / deployed), so a
-//   failed-patch term would always be zero; deployment failures are
-//   counted separately from GET /api/v1/patch-deployments/.
+//   Declined patches are excluded (out of scope). The seed writes
+//   no "failed" patches — the Patch model documents only
+//   available / testing / approved / declined / deployed — so the
+//   patch-status breakdown accounts for every row (including
+//   "other" for any status outside the known five), and nothing
+//   ever vanishes.
+//
+// DEPLOYMENT PIPELINE (from GET /api/v1/patch-deployments/):
+//   all seven documented statuses (scheduled, testing, approved,
+//   deploying, deployed, failed, declined) plus "other" — the
+//   stage counts always sum to the deployment total. The previous
+//   screen showed only deployed + failed and silently dropped 12
+//   of the 30 deployments; that is fixed here.
+//
+// SERVERS (from GET /api/v1/servers/): all rows listed with role,
+// OS and health_status. Health is the LAST RECORDED health_status
+// — no live CPU/memory/disk telemetry is collected for servers,
+// so this is a recorded state, not a live probe.
+//
+// MTTR: not shown as a number. Deployment records carry no
+// resolved timestamp, so mean time to resolve cannot be measured
+// from these records — the workload panel says so instead of
+// inventing a value.
 //
 // TREND BUCKETING: 7d range → daily buckets; 30d / 90d → weekly
-// buckets, each labelled by its start date. The compliance trend is a
-// cumulative snapshot per bucket: patches with created_at on or before
-// the bucket end, run through the compliance formula above. Buckets
-// with an empty denominator are dropped; fewer than two surviving
-// points renders an EmptyState instead of a line.
+// buckets, each labelled by its start date. The compliance trend
+// is a cumulative snapshot per bucket: patches with created_at on
+// or before the bucket end, run through the compliance formula.
+// Buckets with an empty denominator are dropped; fewer than two
+// surviving points renders an EmptyState instead of a line.
 //
 // OS DISTRIBUTION: from device attributes.os.platform (the agent
 // enrolls with runtime.GOOS: darwin / windows / linux), mapped to
-// display names. attributes.os.name is NEVER displayed — the agent's
-// macOS version detection is broken and it reads "macOS <nil>".
-// Devices with no platform read as "Unknown".
+// display names. attributes.os.name is NEVER displayed — the
+// agent's macOS version detection is broken and it reads
+// "macOS <nil>". Devices with no platform read as "Unknown".
 //
-// ENROLLMENT ACTIVITY: bucketed from device attributes.collected
-// (the RFC3339 timestamp the agent sends at enrollment), because the
-// devices list exposes no created_at.
+// DRILL-DOWN: every chart segment, bar, queue row, server row and
+// group row opens a DetailDrawer with the underlying records.
+// Device drill-downs open the shared EndpointDetailDrawer
+// (components/EndpointDetailDrawer.tsx) via openDeviceDetail.
+// Drawer record lists always offer "Open in <module>" so a
+// drill-down never strands the user.
 //
-// SAMPLE-DATA PILL: shown when any fetched patch, deployment, or
-// server row has is_demo === true. Those list endpoints serialize
-// every column (_crud._serialize), so is_demo is present. Devices
-// cannot contribute: DeviceOut omits is_demo even though the Device
-// model has the column.
-//
-// DATE RANGE: 7d / 30d / 90d filters the computed series and the
-// activity timeline. The KPI row is always the current snapshot
-// (health and compliance are point-in-time, not range-scoped).
+// ── Reconciliation against nexus-backend/app/routers/demo.py ──
+// (seed-time values; health buckets drift as check-ins age — the
+// formulas above always reconcile with whatever rows exist):
+//   devices: 60 demo + 1 live Mac = 61. At seed time: online 30,
+//     attention 13 (12 demo + the Mac), offline 12, degraded 6.
+//   departments 12 × 5 (+ Mac Unassigned); groups 15 × 4 (+ Mac
+//     Unassigned); OS Windows 24 / macOS 25 (24 demo + Mac) /
+//     Linux 12 — each breakdown sums to 61.
+//   patches: deployed 57, approved 18, available 18, testing 9,
+//     declined 18, failed 0 = 120. Compliance 57/102 = 56%.
+//     Pending (available + testing + approved) = 45.
+//   deployments: deployed 12, failed 6, scheduled 3, approved 3,
+//     deploying 3, declined 3 = 30.
+//   servers: healthy 5, degraded 2, down 1 = 8.
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
 import axios from 'axios'
 import {
   ActivityTimeline,
   AttentionQueue,
-  BarChart,
   ChartContainer,
-  DonutChart,
+  DetailDrawer,
+  EndpointDetailDrawer,
   EmptyState,
-  KpiPanel,
-  LineChart,
+  Sparkline,
+  StatusBadge,
+  Tabs,
 } from '../components'
 import type { AttentionItem, TimelineItem, TimelineTone } from '../components'
+import { ClickableDonut } from './itops/ClickableDonut'
+import { ClickableBarRows } from './itops/ClickableBars'
+import type { ClickableBarRow } from './itops/ClickableBars'
 import { NULL_COLORS } from '../theme'
 
 type ItOpsHomeProps = {
   api: string
   headers: Record<string, string>
+  userRole?: string
   onNavigate: (moduleId: string, subsectionId?: string) => void
 }
 
@@ -84,12 +130,15 @@ type DeviceRow = {
   enrollment_status: string
   agent_version?: string | null
   last_checkin_at?: string | null
+  is_demo?: boolean
+  created_at?: string | null
   attributes?: Record<string, any> | null
 }
 
 type PatchRow = {
   id: string
   title?: string | null
+  kb_id?: string | null
   status?: string | null
   severity?: string | null
   product?: string | null
@@ -102,6 +151,9 @@ type DeploymentRow = {
   name?: string | null
   title?: string | null
   status?: string | null
+  scope?: string | null
+  schedule?: string | null
+  test_result?: string | null
   is_demo?: boolean
   created_at?: string | null
 }
@@ -111,6 +163,7 @@ type ServerRow = {
   hostname?: string | null
   title?: string | null
   os?: string | null
+  role?: string | null
   health_status?: string | null
   status?: string | null
   is_demo?: boolean
@@ -122,19 +175,19 @@ type RangeKey = '7d' | '30d' | '90d'
 const RANGE_DAYS: Record<RangeKey, number> = { '7d': 7, '30d': 30, '90d': 90 }
 
 const SECTIONS = [
-  { id: 'kpis', label: 'KPI row' },
-  { id: 'health', label: 'Endpoint health' },
-  { id: 'compliance', label: 'Patch compliance trend' },
-  { id: 'os', label: 'OS distribution' },
-  { id: 'deployments', label: 'Deployment outcomes' },
-  { id: 'enrollment', label: 'Enrollment activity' },
+  { id: 'fleet', label: 'Fleet health' },
+  { id: 'patch', label: 'Patch posture' },
+  { id: 'servers', label: 'Servers' },
+  { id: 'groups', label: 'Endpoint groups' },
+  { id: 'pipeline', label: 'Deployment pipeline' },
+  { id: 'workload', label: 'Operational workload' },
   { id: 'attention', label: 'Needs attention' },
   { id: 'activity', label: 'Recent activity' },
 ] as const
 
 type SectionId = (typeof SECTIONS)[number]['id']
 
-const SECTIONS_STORAGE_KEY = 'null_itops_sections'
+const SECTIONS_STORAGE_KEY = 'null_itops_sections_v2'
 
 const STALE_MS = 24 * 60 * 60 * 1000 // 24h — offline threshold
 const ONLINE_MS = 60 * 60 * 1000 // 1h — online threshold, matches backend device_stats
@@ -181,17 +234,48 @@ function osDisplayName(platform: unknown): string {
   }
 }
 
+/** A device is live when the backend says it is not demo data. The
+ * device_id prefix is a fallback for rows where is_demo is absent. */
+function isLiveDevice(d: DeviceRow): boolean {
+  if (typeof d.is_demo === 'boolean') return !d.is_demo
+  return !String(d.device_id || '').startsWith('demo-')
+}
+
+type HealthBucket = 'online' | 'attention' | 'offline' | 'degraded'
+
+function healthOf(dev: DeviceRow, now: number): HealthBucket | null {
+  const status = (dev.enrollment_status || '').toLowerCase()
+  if (status === 'suspended') return 'degraded'
+  if (status === 'decommissioned') return null // not in the fleet
+  if (status !== 'enrolled') return null
+  const last = parseDate(dev.last_checkin_at)
+  if (!last) return 'offline'
+  const age = now - last.getTime()
+  if (age <= ONLINE_MS) return 'online'
+  if (age <= STALE_MS) return 'attention'
+  return 'offline'
+}
+
+const HEALTH_LABEL: Record<HealthBucket, string> = {
+  online: 'Online',
+  attention: 'Attention',
+  offline: 'Offline',
+  degraded: 'Degraded',
+}
+
+const HEALTH_COLOR: Record<HealthBucket, string> = {
+  online: NULL_COLORS.success,
+  attention: NULL_COLORS.warning,
+  offline: NULL_COLORS.critical,
+  degraded: NULL_COLORS.info,
+}
+
+function attrString(value: unknown): string {
+  return typeof value === 'string' && value.trim() ? value : 'Unassigned'
+}
+
 function loadSections(): Record<SectionId, boolean> {
-  const all: Record<SectionId, boolean> = {
-    kpis: true,
-    health: true,
-    compliance: true,
-    os: true,
-    deployments: true,
-    enrollment: true,
-    attention: true,
-    activity: true,
-  }
+  const all = Object.fromEntries(SECTIONS.map((s) => [s.id, true])) as Record<SectionId, boolean>
   try {
     const raw = localStorage.getItem(SECTIONS_STORAGE_KEY)
     if (!raw) return all
@@ -206,7 +290,7 @@ function loadSections(): Record<SectionId, boolean> {
   return all
 }
 
-export function ItOpsHome({ api, headers, onNavigate }: ItOpsHomeProps) {
+export function ItOpsHome({ api, headers, onNavigate, userRole }: ItOpsHomeProps) {
   const [devices, setDevices] = useState<DeviceRow[]>([])
   const [patches, setPatches] = useState<PatchRow[]>([])
   const [deployments, setDeployments] = useState<DeploymentRow[]>([])
@@ -217,6 +301,9 @@ export function ItOpsHome({ api, headers, onNavigate }: ItOpsHomeProps) {
   const [range, setRange] = useState<RangeKey>('30d')
   const [sections, setSections] = useState<Record<SectionId, boolean>>(loadSections)
   const [customizing, setCustomizing] = useState(false)
+  const [groupTab, setGroupTab] = useState<'departments' | 'groups' | 'os'>('departments')
+  const [drawer, setDrawer] = useState<{ title: string; body: ReactNode } | null>(null)
+  const [detailDevice, setDetailDevice] = useState<DeviceRow | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -257,6 +344,8 @@ export function ItOpsHome({ api, headers, onNavigate }: ItOpsHomeProps) {
     })
   }
 
+  const closeDrawer = () => setDrawer(null)
+
   const rangeDays = RANGE_DAYS[range]
   const rangeStart = useMemo(() => new Date(Date.now() - rangeDays * 24 * 60 * 60 * 1000), [rangeDays])
   const bucketDays = range === '7d' ? 1 : 7
@@ -278,75 +367,74 @@ export function ItOpsHome({ api, headers, onNavigate }: ItOpsHomeProps) {
     [rangeStart],
   )
 
-  /* ------------------------------ health ------------------------------ */
+  /* ------------------------- fleet (devices) -------------------------- */
 
-  const health = useMemo(() => {
+  // The fleet excludes decommissioned devices everywhere on this
+  // screen, so the donut, the group breakdowns and the totals all
+  // reconcile to the same number.
+  const fleetDevices = useMemo(
+    () => devices.filter((d) => (d.enrollment_status || '').toLowerCase() !== 'decommissioned'),
+    [devices],
+  )
+
+  const totalEndpoints = fleetDevices.length
+
+  const healthBuckets = useMemo(() => {
     const now = Date.now()
-    let online = 0
-    let attention = 0
-    let offline = 0
-    let degraded = 0
-    for (const dev of devices) {
-      const status = (dev.enrollment_status || '').toLowerCase()
-      if (status === 'suspended') {
-        degraded++
-        continue
-      }
-      if (status === 'decommissioned') continue // not in the fleet
-      if (status !== 'enrolled') continue
-      const last = parseDate(dev.last_checkin_at)
-      if (!last) {
-        offline++
-      } else if (now - last.getTime() <= ONLINE_MS) {
-        online++
-      } else if (now - last.getTime() <= STALE_MS) {
-        attention++
-      } else {
-        offline++
-      }
+    const out: Record<HealthBucket, DeviceRow[]> = { online: [], attention: [], offline: [], degraded: [] }
+    for (const dev of fleetDevices) {
+      const bucket = healthOf(dev, now)
+      if (bucket) out[bucket].push(dev)
     }
-    return { online, attention, offline, degraded }
-  }, [devices])
+    return out
+  }, [fleetDevices])
 
-  const totalEndpoints = devices.filter((d) => (d.enrollment_status || '').toLowerCase() !== 'decommissioned').length
+  const health = {
+    online: healthBuckets.online.length,
+    attention: healthBuckets.attention.length,
+    offline: healthBuckets.offline.length,
+    degraded: healthBuckets.degraded.length,
+  }
+
+  const liveDevices = useMemo(() => fleetDevices.filter(isLiveDevice), [fleetDevices])
+
+  const countSeries = useCallback(
+    (dates: (Date | null)[]) => {
+      // Counts of events per bucket (events dated by `dates`, in range).
+      return buckets.map((b) => dates.filter((d) => d && d >= b.start && d < b.end).length)
+    },
+    [buckets],
+  )
+
+  const enrollmentSeries = useMemo(() => {
+    const dates = fleetDevices.map((d) => parseDate(d.attributes?.collected))
+    return countSeries(dates)
+  }, [fleetDevices, countSeries])
 
   /* ----------------------------- patches ------------------------------ */
 
+  const PATCH_STATUSES = ['deployed', 'available', 'testing', 'approved', 'declined', 'failed'] as const
+
   const patchCounts = useMemo(() => {
-    let deployed = 0
-    let available = 0
-    let testing = 0
-    let approved = 0
-    let declined = 0
+    const counts: Record<string, number> = { deployed: 0, available: 0, testing: 0, approved: 0, declined: 0, failed: 0, other: 0 }
     for (const p of patches) {
-      switch ((p.status || '').toLowerCase()) {
-        case 'deployed':
-          deployed++
-          break
-        case 'available':
-          available++
-          break
-        case 'testing':
-          testing++
-          break
-        case 'approved':
-          approved++
-          break
-        case 'declined':
-          declined++
-          break
-      }
+      const s = (p.status || '').toLowerCase()
+      if (s in counts) counts[s]++
+      else counts.other++
     }
-    return { deployed, available, testing, approved, declined }
+    return counts
   }, [patches])
 
   // Patch compliance = deployed / (deployed + available + testing +
-  // approved); declined excluded. Null when the denominator is zero —
-  // no patches to measure, not "0% compliant".
+  // approved); declined and failed excluded (see file header). Null
+  // when the denominator is zero — no patches to measure, not "0%".
   const compliancePct = useMemo(() => {
     const denom = patchCounts.deployed + patchCounts.available + patchCounts.testing + patchCounts.approved
     return denom === 0 ? null : Math.round((patchCounts.deployed / denom) * 100)
   }, [patchCounts])
+
+  const complianceDenom =
+    patchCounts.deployed + patchCounts.available + patchCounts.testing + patchCounts.approved
 
   const pendingPatches = patchCounts.available + patchCounts.testing + patchCounts.approved
 
@@ -371,33 +459,6 @@ export function ItOpsHome({ api, headers, onNavigate }: ItOpsHomeProps) {
     return points
   }, [buckets, patches])
 
-  const countSeries = useCallback(
-    (dates: (Date | null)[]) => {
-      // Counts of events per bucket (events dated by `dates`, in range).
-      return buckets.map((b) => dates.filter((d) => d && d >= b.start && d < b.end).length)
-    },
-    [buckets],
-  )
-
-  const enrollmentSeries = useMemo(() => {
-    const dates = devices.map((d) => parseDate(d.attributes?.collected))
-    return countSeries(dates)
-  }, [devices, countSeries])
-
-  const pendingPatchSeries = useMemo(() => {
-    const dates = patches
-      .filter((p) => ['available', 'testing', 'approved'].includes((p.status || '').toLowerCase()))
-      .map((p) => parseDate(p.created_at))
-    return countSeries(dates)
-  }, [patches, countSeries])
-
-  const failedDeploymentSeries = useMemo(() => {
-    const dates = deployments
-      .filter((d) => (d.status || '').toLowerCase() === 'failed')
-      .map((d) => parseDate(d.created_at))
-    return countSeries(dates)
-  }, [deployments, countSeries])
-
   const complianceTrend = useMemo(() => {
     if (complianceSeries.length < 2 || compliancePct === null) return undefined
     const first = complianceSeries[0].value
@@ -412,161 +473,637 @@ export function ItOpsHome({ api, headers, onNavigate }: ItOpsHomeProps) {
 
   /* --------------------------- deployments ---------------------------- */
 
+  const DEPLOYMENT_STATUSES = ['scheduled', 'testing', 'approved', 'deploying', 'deployed', 'failed', 'declined'] as const
+
   const deploymentCounts = useMemo(() => {
-    let deployed = 0
-    let failed = 0
+    const counts: Record<string, number> = {
+      scheduled: 0, testing: 0, approved: 0, deploying: 0, deployed: 0, failed: 0, declined: 0, other: 0,
+    }
     for (const d of deployments) {
       const s = (d.status || '').toLowerCase()
-      if (s === 'deployed') deployed++
-      else if (s === 'failed') failed++
+      if (s in counts) counts[s]++
+      else counts.other++
     }
-    return { deployed, failed }
+    return counts
   }, [deployments])
 
   const failedDeployments = deployments.filter((d) => (d.status || '').toLowerCase() === 'failed')
 
-  /* ------------------------------ OS mix ------------------------------ */
+  /* ------------------------------ servers ----------------------------- */
 
-  const osDistribution = useMemo(() => {
-    const counts = new Map<string, number>()
-    for (const d of devices) {
-      const label = osDisplayName(d.attributes?.os?.platform)
-      counts.set(label, (counts.get(label) ?? 0) + 1)
+  const serverCounts = useMemo(() => {
+    const counts: Record<string, number> = { healthy: 0, degraded: 0, down: 0, other: 0 }
+    for (const s of servers) {
+      const h = (s.health_status || '').toLowerCase()
+      if (h in counts) counts[h]++
+      else counts.other++
     }
-    return [...counts.entries()]
-      .map(([label, value]) => ({ label, value }))
-      .sort((a, b) => b.value - a.value)
-  }, [devices])
+    return counts
+  }, [servers])
+
+  /* ------------------------- group breakdowns ------------------------- */
+
+  type GroupSlice = { label: string; rows: DeviceRow[]; online: number; stale: number; suspended: number }
+
+  const groupBreakdowns = useMemo(() => {
+    const onlineIds = new Set(healthBuckets.online.map((d) => d.id))
+    const degradedIds = new Set(healthBuckets.degraded.map((d) => d.id))
+    const build = (pick: (d: DeviceRow) => string): GroupSlice[] => {
+      const map = new Map<string, DeviceRow[]>()
+      for (const d of fleetDevices) {
+        const key = pick(d)
+        const arr = map.get(key)
+        if (arr) arr.push(d)
+        else map.set(key, [d])
+      }
+      return [...map.entries()]
+        .map(([label, rows]) => ({
+          label,
+          rows,
+          online: rows.filter((d) => onlineIds.has(d.id)).length,
+          suspended: rows.filter((d) => degradedIds.has(d.id)).length,
+          stale: rows.filter((d) => !onlineIds.has(d.id) && !degradedIds.has(d.id)).length,
+        }))
+        .sort((a, b) => b.rows.length - a.rows.length || a.label.localeCompare(b.label))
+    }
+    return {
+      departments: build((d) => attrString(d.attributes?.department)),
+      groups: build((d) => attrString(d.attributes?.device_group)),
+      os: build((d) => osDisplayName(d.attributes?.os?.platform)),
+    }
+  }, [fleetDevices, healthBuckets])
+
+  const activeGroups = groupBreakdowns[groupTab]
+
+  const groupRows: ClickableBarRow[] = activeGroups.map((g) => {
+    const parts = [`${g.online} online`, `${g.stale} stale or offline`]
+    if (g.suspended > 0) parts.push(`${g.suspended} suspended`)
+    return {
+      label: g.label,
+      value: g.rows.length,
+      detail: parts.join(' · '),
+      onSelect: () => openDeviceList(`${g.label} — ${g.rows.length} endpoints`, g.rows),
+    }
+  })
+
+  /* --------------------------- drill-downs ---------------------------- */
+
+  const liveBadge = (
+    <span
+      className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[#E7F3EE] px-2 py-0.5 text-[11px] font-semibold text-null-success"
+      title="Live endpoint — enrolled by the real agent, not sample data."
+    >
+      <span className="inline-block h-1.5 w-1.5 rounded-full bg-null-success" aria-hidden />
+      Live
+    </span>
+  )
+
+  const sampleBadge = (
+    <span
+      className="inline-flex shrink-0 items-center rounded-full bg-null-tealSoft px-2 py-0.5 text-[11px] font-medium text-null-tealDark"
+      title="Sample data — demonstration record, not live telemetry."
+    >
+      Sample
+    </span>
+  )
+
+  const lastCheckinText = (d: DeviceRow): string => {
+    const last = parseDate(d.last_checkin_at)
+    return last ? `${timeAgo(last)} (${fmtDateTime(last)})` : 'never checked in'
+  }
+
+  const deviceHealthText = (d: DeviceRow): string => {
+    const bucket = healthOf(d, Date.now())
+    return bucket ? HEALTH_LABEL[bucket] : (d.enrollment_status || '—')
+  }
+
+  const openDeviceList = (title: string, rows: DeviceRow[]) => {
+    setDrawer({
+      title,
+      body:
+        rows.length === 0 ? (
+          <p className="text-sm text-null-muted dark:text-[#8AA0B8]">No endpoints in this group.</p>
+        ) : (
+          <ul className="space-y-2">
+            {rows.map((d) => (
+              <li key={d.id}>
+                <button
+                  type="button"
+                  onClick={() => openDeviceDetail(d)}
+                  className="flex w-full items-center gap-3 rounded-lg border border-null-line px-3 py-2 text-left hover:bg-null-cloud dark:border-white/10 dark:hover:bg-null-navy2"
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium text-null-ink dark:text-white">
+                      {d.hostname || d.device_id}
+                    </span>
+                    <span className="block truncate text-xs text-null-muted dark:text-[#8AA0B8]">
+                      {deviceHealthText(d)} · last check-in {lastCheckinText(d)}
+                    </span>
+                  </span>
+                  {isLiveDevice(d) ? liveBadge : sampleBadge}
+                </button>
+              </li>
+            ))}
+          </ul>
+        ),
+    })
+  }
+
+  const openDeviceDetail = (d: DeviceRow) => {
+    // Device drill-downs open the shared endpoint detail view:
+    // live connectivity, hardware/OS, applications from the latest
+    // inventory snapshot, linked vulns/patches, command history +
+    // execution, and WoL.
+    setDetailDevice(d)
+  }
+
+  const openPatchList = (title: string, rows: PatchRow[]) => {
+    setDrawer({
+      title,
+      body:
+        rows.length === 0 ? (
+          <p className="text-sm text-null-muted dark:text-[#8AA0B8]">No patches in this group.</p>
+        ) : (
+          <ul className="space-y-2">
+            {rows.map((p) => (
+              <li key={p.id}>
+                <button
+                  type="button"
+                  onClick={() => openPatchDetail(p)}
+                  className="flex w-full items-center gap-3 rounded-lg border border-null-line px-3 py-2 text-left hover:bg-null-cloud dark:border-white/10 dark:hover:bg-null-navy2"
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium text-null-ink dark:text-white">
+                      {p.title || 'Untitled patch'}
+                    </span>
+                    <span className="block truncate text-xs text-null-muted dark:text-[#8AA0B8]">
+                      {[p.product, p.severity].filter(Boolean).join(' · ') || '—'}
+                    </span>
+                  </span>
+                  <StatusBadge value={p.status} size="sm" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        ),
+    })
+  }
+
+  const openPatchDetail = (p: PatchRow) => {
+    const created = parseDate(p.created_at)
+    setDrawer({
+      title: p.title || 'Untitled patch',
+      body: (
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center gap-2">
+            {p.is_demo ? sampleBadge : null}
+            <StatusBadge value={p.status} />
+          </div>
+          <dl className="space-y-2 text-sm">
+            <div className="flex justify-between gap-3">
+              <dt className="text-null-muted dark:text-[#8AA0B8]">Product</dt>
+              <dd>{p.product || '—'}</dd>
+            </div>
+            <div className="flex justify-between gap-3">
+              <dt className="text-null-muted dark:text-[#8AA0B8]">Severity</dt>
+              <dd>{p.severity || '—'}</dd>
+            </div>
+            <div className="flex justify-between gap-3">
+              <dt className="text-null-muted dark:text-[#8AA0B8]">KB / reference</dt>
+              <dd className="font-mono text-xs">{p.kb_id || '—'}</dd>
+            </div>
+            <div className="flex justify-between gap-3">
+              <dt className="text-null-muted dark:text-[#8AA0B8]">Recorded</dt>
+              <dd>{created ? fmtDateTime(created) : '—'}</dd>
+            </div>
+          </dl>
+          <button
+            type="button"
+            onClick={() => {
+              closeDrawer()
+              onNavigate('patches')
+            }}
+            className="rounded bg-null-teal px-4 py-2 text-sm font-medium text-white hover:bg-null-tealDark"
+          >
+            Open in Patches
+          </button>
+        </div>
+      ),
+    })
+  }
+
+  const openDeploymentList = (title: string, rows: DeploymentRow[]) => {
+    setDrawer({
+      title,
+      body:
+        rows.length === 0 ? (
+          <p className="text-sm text-null-muted dark:text-[#8AA0B8]">No deployments in this group.</p>
+        ) : (
+          <ul className="space-y-2">
+            {rows.map((d) => (
+              <li key={d.id}>
+                <button
+                  type="button"
+                  onClick={() => openDeploymentDetail(d)}
+                  className="flex w-full items-center gap-3 rounded-lg border border-null-line px-3 py-2 text-left hover:bg-null-cloud dark:border-white/10 dark:hover:bg-null-navy2"
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium text-null-ink dark:text-white">
+                      {d.name || d.title || 'Untitled deployment'}
+                    </span>
+                    <span className="block truncate text-xs text-null-muted dark:text-[#8AA0B8]">
+                      {[d.scope, d.schedule].filter(Boolean).join(' · ') || '—'}
+                    </span>
+                  </span>
+                  <StatusBadge value={d.status} size="sm" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        ),
+    })
+  }
+
+  const openDeploymentDetail = (d: DeploymentRow) => {
+    const created = parseDate(d.created_at)
+    setDrawer({
+      title: d.name || d.title || 'Untitled deployment',
+      body: (
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center gap-2">
+            {d.is_demo ? sampleBadge : null}
+            <StatusBadge value={d.status} />
+          </div>
+          <dl className="space-y-2 text-sm">
+            <div className="flex justify-between gap-3">
+              <dt className="text-null-muted dark:text-[#8AA0B8]">Scope</dt>
+              <dd>{d.scope || '—'}</dd>
+            </div>
+            <div className="flex justify-between gap-3">
+              <dt className="text-null-muted dark:text-[#8AA0B8]">Schedule</dt>
+              <dd>{d.schedule || '—'}</dd>
+            </div>
+            <div className="flex justify-between gap-3">
+              <dt className="text-null-muted dark:text-[#8AA0B8]">Test result</dt>
+              <dd>{d.test_result || '—'}</dd>
+            </div>
+            <div className="flex justify-between gap-3">
+              <dt className="text-null-muted dark:text-[#8AA0B8]">Recorded</dt>
+              <dd>{created ? fmtDateTime(created) : '—'}</dd>
+            </div>
+          </dl>
+          <button
+            type="button"
+            onClick={() => {
+              closeDrawer()
+              onNavigate('patches', 'deployments')
+            }}
+            className="rounded bg-null-teal px-4 py-2 text-sm font-medium text-white hover:bg-null-tealDark"
+          >
+            Open in Deployments
+          </button>
+        </div>
+      ),
+    })
+  }
+
+  const openServerList = (title: string, rows: ServerRow[]) => {
+    setDrawer({
+      title,
+      body:
+        rows.length === 0 ? (
+          <p className="text-sm text-null-muted dark:text-[#8AA0B8]">No servers in this group.</p>
+        ) : (
+          <ul className="space-y-2">
+            {rows.map((s) => (
+              <li key={s.id}>
+                <button
+                  type="button"
+                  onClick={() => openServerDetail(s)}
+                  className="flex w-full items-center gap-3 rounded-lg border border-null-line px-3 py-2 text-left hover:bg-null-cloud dark:border-white/10 dark:hover:bg-null-navy2"
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium text-null-ink dark:text-white">
+                      {s.hostname || s.title || 'Unnamed server'}
+                    </span>
+                    <span className="block truncate text-xs text-null-muted dark:text-[#8AA0B8]">
+                      {[s.role, s.os].filter(Boolean).join(' · ') || '—'}
+                    </span>
+                  </span>
+                  <StatusBadge value={s.health_status} size="sm" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        ),
+    })
+  }
+
+  const openServerDetail = (s: ServerRow) => {
+    const created = parseDate(s.created_at)
+    setDrawer({
+      title: s.hostname || s.title || 'Unnamed server',
+      body: (
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center gap-2">
+            {s.is_demo ? sampleBadge : null}
+            <StatusBadge value={s.health_status} />
+            <StatusBadge value={s.status} />
+          </div>
+          <dl className="space-y-2 text-sm">
+            <div className="flex justify-between gap-3">
+              <dt className="text-null-muted dark:text-[#8AA0B8]">Role</dt>
+              <dd>{s.role || '—'}</dd>
+            </div>
+            <div className="flex justify-between gap-3">
+              <dt className="text-null-muted dark:text-[#8AA0B8]">Operating system</dt>
+              <dd>{s.os || '—'}</dd>
+            </div>
+            <div className="flex justify-between gap-3">
+              <dt className="text-null-muted dark:text-[#8AA0B8]">Added</dt>
+              <dd>{created ? fmtDateTime(created) : '—'}</dd>
+            </div>
+          </dl>
+          <p className="text-xs text-null-muted dark:text-[#8AA0B8]">
+            Health is the last recorded health_status. No live CPU, memory, or disk telemetry is collected
+            for servers, so this is a recorded state, not a live probe.
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              closeDrawer()
+              onNavigate('servers')
+            }}
+            className="rounded bg-null-teal px-4 py-2 text-sm font-medium text-white hover:bg-null-tealDark"
+          >
+            Open in Servers
+          </button>
+        </div>
+      ),
+    })
+  }
 
   /* --------------------------- attention queue ------------------------ */
 
   const attentionItems = useMemo<AttentionItem[]>(() => {
-    const items: AttentionItem[] = []
+    // Ranked BEFORE slicing: severity first (critical → high →
+    // medium), then most recent first. Slicing the push order
+    // instead hid whole categories — the 12 stale demo devices
+    // filled all 12 slots, so failed deployments, testing patches
+    // and degraded/down servers never appeared.
+    const rankOf = (s: string) => (s === 'critical' ? 0 : s === 'high' ? 1 : s === 'medium' ? 2 : 3)
+    const entries: { rank: number; ts: number; item: AttentionItem }[] = []
     const now = Date.now()
-    for (const dev of devices) {
+    for (const dev of fleetDevices) {
       if ((dev.enrollment_status || '').toLowerCase() !== 'enrolled') continue
       const last = parseDate(dev.last_checkin_at)
       const ageMs = last ? now - last.getTime() : Infinity
       if (ageMs <= STALE_MS) continue
       const staleDays = Number.isFinite(ageMs) ? Math.floor(ageMs / (24 * 60 * 60 * 1000)) : null
-      items.push({
-        id: `stale-${dev.id}`,
-        severity: !last || (staleDays !== null && staleDays >= 7) ? 'critical' : 'high',
-        title: `${dev.hostname || dev.device_id} — stale check-in`,
-        asset: dev.device_id,
-        status: last ? `last check-in ${timeAgo(last)}` : 'never checked in',
-        time: last ? fmtDateTime(last) : undefined,
-        actionLabel: 'View',
-        onAction: () => onNavigate('devices'),
+      const severity: 'critical' | 'high' = !last || (staleDays !== null && staleDays >= 7) ? 'critical' : 'high'
+      entries.push({
+        rank: rankOf(severity),
+        ts: last ? last.getTime() : 0,
+        item: {
+          id: `stale-${dev.id}`,
+          severity,
+          title: `${dev.hostname || dev.device_id} — stale check-in`,
+          asset: dev.device_id,
+          status: last ? `last check-in ${timeAgo(last)}` : 'never checked in',
+          time: last ? fmtDateTime(last) : undefined,
+          actionLabel: 'View',
+          onAction: () => openDeviceDetail(dev),
+        },
       })
     }
     for (const d of failedDeployments) {
-      items.push({
-        id: `failed-dep-${d.id}`,
-        severity: 'critical',
-        title: `Failed deployment: ${d.name || d.title || 'Untitled'}`,
-        status: d.status || 'failed',
-        time: parseDate(d.created_at) ? fmtDateTime(parseDate(d.created_at)!) : undefined,
-        actionLabel: 'Review',
-        onAction: () => onNavigate('patches', 'deployments'),
+      const when = parseDate(d.created_at)
+      entries.push({
+        rank: 0,
+        ts: when ? when.getTime() : 0,
+        item: {
+          id: `failed-dep-${d.id}`,
+          severity: 'critical',
+          title: `Failed deployment: ${d.name || d.title || 'Untitled'}`,
+          status: d.status || 'failed',
+          time: when ? fmtDateTime(when) : undefined,
+          actionLabel: 'Review',
+          onAction: () => openDeploymentDetail(d),
+        },
       })
     }
     for (const p of patches) {
       if ((p.status || '').toLowerCase() === 'testing') {
-        items.push({
-          id: `awaiting-${p.id}`,
-          severity: 'medium',
-          title: `Patch awaiting approval: ${p.title || 'Untitled patch'}`,
-          asset: p.product || undefined,
-          status: 'testing',
-          time: parseDate(p.created_at) ? fmtDateTime(parseDate(p.created_at)!) : undefined,
-          actionLabel: 'Review',
-          onAction: () => onNavigate('patches'),
+        const when = parseDate(p.created_at)
+        entries.push({
+          rank: 2,
+          ts: when ? when.getTime() : 0,
+          item: {
+            id: `awaiting-${p.id}`,
+            severity: 'medium',
+            title: `Patch awaiting approval: ${p.title || 'Untitled patch'}`,
+            asset: p.product || undefined,
+            status: 'testing',
+            time: when ? fmtDateTime(when) : undefined,
+            actionLabel: 'Review',
+            onAction: () => openPatchDetail(p),
+          },
         })
       }
     }
     for (const s of servers) {
       const hs = (s.health_status || '').toLowerCase()
       if (hs === 'degraded' || hs === 'down') {
-        items.push({
-          id: `server-${s.id}`,
-          severity: hs === 'down' ? 'critical' : 'high',
-          title: `Server ${hs}: ${s.hostname || s.title || 'Unnamed server'}`,
-          asset: s.os || undefined,
-          status: s.health_status || '',
-          actionLabel: 'View',
-          onAction: () => onNavigate('servers'),
+        const when = parseDate(s.created_at)
+        entries.push({
+          rank: hs === 'down' ? 0 : 1,
+          ts: when ? when.getTime() : 0,
+          item: {
+            id: `server-${s.id}`,
+            severity: hs === 'down' ? 'critical' : 'high',
+            title: `Server ${hs}: ${s.hostname || s.title || 'Unnamed server'}`,
+            asset: s.os || undefined,
+            status: s.health_status || '',
+            actionLabel: 'View',
+            onAction: () => openServerDetail(s),
+          },
         })
       }
     }
-    return items.slice(0, 12)
-  }, [devices, failedDeployments, patches, servers, onNavigate])
+    entries.sort((a, b) => a.rank - b.rank || b.ts - a.ts)
+    return entries.slice(0, 12).map((e) => e.item)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fleetDevices, failedDeployments, patches, servers])
 
   /* --------------------------- recent activity ------------------------ */
 
   const timelineItems = useMemo<TimelineItem[]>(() => {
-    const items: TimelineItem[] = []
+    // Sorted by the numeric timestamp, not the formatted string:
+    // sorting fmtDateTime() output parses back to NaN outside
+    // en-US locales and silently mis-orders the timeline.
+    const entries: { when: Date; item: TimelineItem }[] = []
     for (const d of deployments) {
       const when = parseDate(d.created_at)
       if (!when || !inRange(when)) continue
       const status = (d.status || '').toLowerCase()
       const tone: TimelineTone = status === 'deployed' ? 'success' : status === 'failed' ? 'critical' : 'info'
-      items.push({
-        id: `dep-${d.id}`,
-        time: fmtDateTime(when),
-        title: `Deployment ${d.name || d.title || 'Untitled'} — ${status || '—'}`,
-        tone,
+      entries.push({
+        when,
+        item: {
+          id: `dep-${d.id}`,
+          time: fmtDateTime(when),
+          title: `Deployment ${d.name || d.title || 'Untitled'} — ${status || '—'}`,
+          tone,
+        },
       })
     }
-    for (const dev of devices) {
+    for (const dev of fleetDevices) {
       const when = parseDate(dev.attributes?.collected)
       if (!when || !inRange(when)) continue
-      items.push({
-        id: `enroll-${dev.id}`,
-        time: fmtDateTime(when),
-        title: `${dev.hostname || dev.device_id} enrolled`,
-        detail: dev.agent_version ? `Agent ${dev.agent_version}` : undefined,
-        tone: 'success',
+      entries.push({
+        when,
+        item: {
+          id: `enroll-${dev.id}`,
+          time: fmtDateTime(when),
+          title: `${dev.hostname || dev.device_id} enrolled`,
+          detail: dev.agent_version ? `Agent ${dev.agent_version}` : undefined,
+          tone: 'success',
+        },
       })
     }
     for (const p of patches) {
       const when = parseDate(p.created_at)
       if (!when || !inRange(when)) continue
-      items.push({
-        id: `patch-${p.id}`,
-        time: fmtDateTime(when),
-        title: `Patch ${p.title || 'Untitled'} — ${p.status || '—'}`,
-        detail: p.product || undefined,
-        tone: 'info',
+      entries.push({
+        when,
+        item: {
+          id: `patch-${p.id}`,
+          time: fmtDateTime(when),
+          title: `Patch ${p.title || 'Untitled'} — ${p.status || '—'}`,
+          detail: p.product || undefined,
+          tone: 'info',
+        },
       })
     }
     for (const s of servers) {
       const when = parseDate(s.created_at)
       if (!when || !inRange(when)) continue
-      items.push({
-        id: `server-${s.id}`,
-        time: fmtDateTime(when),
-        title: `Server ${s.hostname || s.title || 'Unnamed'} added`,
-        detail: s.os || undefined,
-        tone: 'neutral',
+      entries.push({
+        when,
+        item: {
+          id: `server-${s.id}`,
+          time: fmtDateTime(when),
+          title: `Server ${s.hostname || s.title || 'Unnamed'} added`,
+          detail: s.os || undefined,
+          tone: 'neutral',
+        },
       })
     }
-    return items
-      .sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime())
+    return entries
+      .sort((a, b) => b.when.getTime() - a.when.getTime())
       .slice(0, 15)
-  }, [deployments, devices, patches, servers, inRange])
+      .map((e) => e.item)
+  }, [deployments, fleetDevices, patches, servers, inRange])
 
   /* --------------------------- sample data ---------------------------- */
 
-  // Devices are deliberately excluded: DeviceOut does not expose
-  // is_demo, so a device row can never truthfully say it is sample
-  // data. Patches, deployments and servers serialize every column.
+  // Devices CAN contribute now: DeviceOut exposes is_demo (the old
+  // comment claiming otherwise was wrong — verified against
+  // nexus-backend/app/routers/devices.py, response_model=list[DeviceOut]).
   const hasSampleData =
+    devices.some((d) => d.is_demo === true) ||
     patches.some((p) => p.is_demo === true) ||
     deployments.some((d) => d.is_demo === true) ||
     servers.some((s) => s.is_demo === true)
 
   const hasAnyRows = devices.length > 0 || patches.length > 0 || deployments.length > 0 || servers.length > 0
+
+  /* --------------------------- derived panels ------------------------- */
+
+  const patchBarRows: ClickableBarRow[] = [
+    { label: 'Deployed', value: patchCounts.deployed, color: NULL_COLORS.success, onSelect: () => openPatchList('Deployed patches', patches.filter((p) => (p.status || '').toLowerCase() === 'deployed')) },
+    { label: 'Approved', value: patchCounts.approved, color: NULL_COLORS.teal, onSelect: () => openPatchList('Approved patches', patches.filter((p) => (p.status || '').toLowerCase() === 'approved')) },
+    { label: 'Available', value: patchCounts.available, color: NULL_COLORS.info, onSelect: () => openPatchList('Available patches', patches.filter((p) => (p.status || '').toLowerCase() === 'available')) },
+    { label: 'Testing', value: patchCounts.testing, color: NULL_COLORS.info, onSelect: () => openPatchList('Patches in testing', patches.filter((p) => (p.status || '').toLowerCase() === 'testing')) },
+    { label: 'Declined', value: patchCounts.declined, color: NULL_COLORS.muted, onSelect: () => openPatchList('Declined patches', patches.filter((p) => (p.status || '').toLowerCase() === 'declined')) },
+    { label: 'Failed', value: patchCounts.failed, color: NULL_COLORS.critical, onSelect: () => openPatchList('Failed patches', patches.filter((p) => (p.status || '').toLowerCase() === 'failed')) },
+    ...(patchCounts.other > 0
+      ? [{ label: 'Other', value: patchCounts.other, color: NULL_COLORS.muted, onSelect: () => openPatchList('Patches with other statuses', patches.filter((p) => !PATCH_STATUSES.includes((p.status || '').toLowerCase() as (typeof PATCH_STATUSES)[number]))) } as ClickableBarRow]
+      : []),
+  ]
+
+  const inFlightDeployments = deploymentCounts.scheduled + deploymentCounts.approved + deploymentCounts.deploying
+
+  const pipelineRows: ClickableBarRow[] = [
+    { label: 'Scheduled', value: deploymentCounts.scheduled, color: NULL_COLORS.info, onSelect: () => openDeploymentList('Scheduled deployments', deployments.filter((d) => (d.status || '').toLowerCase() === 'scheduled')) },
+    { label: 'Approved', value: deploymentCounts.approved, color: NULL_COLORS.teal, onSelect: () => openDeploymentList('Approved deployments', deployments.filter((d) => (d.status || '').toLowerCase() === 'approved')) },
+    { label: 'Deploying', value: deploymentCounts.deploying, color: NULL_COLORS.info, onSelect: () => openDeploymentList('Deployments in progress', deployments.filter((d) => (d.status || '').toLowerCase() === 'deploying')) },
+    { label: 'Deployed', value: deploymentCounts.deployed, color: NULL_COLORS.success, onSelect: () => openDeploymentList('Deployed deployments', deployments.filter((d) => (d.status || '').toLowerCase() === 'deployed')) },
+    { label: 'Failed', value: deploymentCounts.failed, color: NULL_COLORS.critical, onSelect: () => openDeploymentList('Failed deployments', failedDeployments) },
+    { label: 'Declined', value: deploymentCounts.declined, color: NULL_COLORS.muted, onSelect: () => openDeploymentList('Declined deployments', deployments.filter((d) => (d.status || '').toLowerCase() === 'declined')) },
+    ...(deploymentCounts.testing > 0
+      ? [{ label: 'Testing', value: deploymentCounts.testing, color: NULL_COLORS.info, onSelect: () => openDeploymentList('Deployments in testing', deployments.filter((d) => (d.status || '').toLowerCase() === 'testing')) } as ClickableBarRow]
+      : []),
+    ...(deploymentCounts.other > 0
+      ? [{ label: 'Other', value: deploymentCounts.other, color: NULL_COLORS.muted, onSelect: () => openDeploymentList('Deployments with other statuses', deployments.filter((d) => !DEPLOYMENT_STATUSES.includes((d.status || '').toLowerCase() as (typeof DEPLOYMENT_STATUSES)[number]))) } as ClickableBarRow]
+      : []),
+  ]
+
+  const workloadRows: ClickableBarRow[] = [
+    {
+      label: 'Pending patches',
+      value: pendingPatches,
+      color: NULL_COLORS.warning,
+      detail: `${patchCounts.available} available · ${patchCounts.testing} testing · ${patchCounts.approved} approved`,
+      onSelect: () =>
+        openPatchList(
+          'Pending patches',
+          patches.filter((p) => ['available', 'testing', 'approved'].includes((p.status || '').toLowerCase())),
+        ),
+    },
+    {
+      label: 'Endpoints offline',
+      value: health.offline,
+      color: NULL_COLORS.critical,
+      detail: 'no check-in for 24h+',
+      onSelect: () => openDeviceList('Offline endpoints', healthBuckets.offline),
+    },
+    {
+      label: 'Failed deployments',
+      value: deploymentCounts.failed,
+      color: NULL_COLORS.critical,
+      detail: 'need retry or review',
+      onSelect: () => openDeploymentList('Failed deployments', failedDeployments),
+    },
+    {
+      label: 'Patches awaiting approval',
+      value: patchCounts.testing,
+      color: NULL_COLORS.info,
+      detail: 'in testing',
+      onSelect: () => openPatchList('Patches in testing', patches.filter((p) => (p.status || '').toLowerCase() === 'testing')),
+    },
+    {
+      label: 'Suspended endpoints',
+      value: health.degraded,
+      color: NULL_COLORS.info,
+      detail: 'enrollment suspended',
+      onSelect: () => openDeviceList('Suspended endpoints', healthBuckets.degraded),
+    },
+    {
+      label: 'Degraded servers',
+      value: serverCounts.degraded,
+      color: NULL_COLORS.warning,
+      detail: 'recorded health degraded',
+      onSelect: () => openServerList('Degraded servers', servers.filter((s) => (s.health_status || '').toLowerCase() === 'degraded')),
+    },
+    {
+      label: 'Failed patches',
+      value: patchCounts.failed,
+      color: NULL_COLORS.critical,
+      detail: 'need retry or review',
+      onSelect: () => openPatchList('Failed patches', patches.filter((p) => (p.status || '').toLowerCase() === 'failed')),
+    },
+  ]
 
   /* --------------------------- CSV report ----------------------------- */
 
@@ -574,26 +1111,39 @@ export function ItOpsHome({ api, headers, onNavigate }: ItOpsHomeProps) {
     const rows: [string, string | number][] = [
       ['IT Operations report', `generated ${new Date().toISOString()}`],
       ['Date range', range],
-      ['Total endpoints', totalEndpoints],
+      ['Total endpoints (fleet, excl. decommissioned)', totalEndpoints],
+      ['Live endpoints', liveDevices.length],
       ['Online endpoints', health.online],
-      ['Endpoints needing attention', health.attention],
-      ['Offline endpoints', health.offline],
-      ['Degraded endpoints', health.degraded],
+      ['Endpoints needing attention (1–24h)', health.attention],
+      ['Offline endpoints (24h+ or never)', health.offline],
+      ['Degraded endpoints (suspended)', health.degraded],
       ['Patch compliance %', compliancePct === null ? 'n/a (no patches to measure)' : compliancePct],
       ['Patches deployed', patchCounts.deployed],
       ['Patches available', patchCounts.available],
       ['Patches testing', patchCounts.testing],
       ['Patches approved', patchCounts.approved],
       ['Patches declined (excluded from compliance)', patchCounts.declined],
+      ['Patches failed (excluded from compliance)', patchCounts.failed],
+      ['Patches other status', patchCounts.other],
       ['Pending patches', pendingPatches],
+      ['Deployments scheduled', deploymentCounts.scheduled],
+      ['Deployments testing', deploymentCounts.testing],
+      ['Deployments approved', deploymentCounts.approved],
+      ['Deployments deploying', deploymentCounts.deploying],
       ['Deployments deployed', deploymentCounts.deployed],
       ['Deployments failed', deploymentCounts.failed],
+      ['Deployments declined', deploymentCounts.declined],
+      ['Deployments other status', deploymentCounts.other],
       ['Servers', servers.length],
-      ['Servers degraded', servers.filter((s) => (s.health_status || '').toLowerCase() === 'degraded').length],
-      ['Servers down', servers.filter((s) => (s.health_status || '').toLowerCase() === 'down').length],
+      ['Servers healthy', serverCounts.healthy],
+      ['Servers degraded', serverCounts.degraded],
+      ['Servers down', serverCounts.down],
       ['Attention items', attentionItems.length],
+      ['Mean time to resolve', 'n/a (no resolved timestamps in deployment records)'],
     ]
-    for (const { label, value } of osDistribution) rows.push([`OS — ${label}`, value])
+    for (const g of groupBreakdowns.departments) rows.push([`Department — ${g.label}`, g.rows.length])
+    for (const g of groupBreakdowns.groups) rows.push([`Device group — ${g.label}`, g.rows.length])
+    for (const g of groupBreakdowns.os) rows.push([`OS — ${g.label}`, g.rows.length])
     const csv = rows.map(([a, b]) => `"${String(a).replace(/"/g, '""')}","${String(b).replace(/"/g, '""')}"`).join('\n')
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
     const url = URL.createObjectURL(blob)
@@ -634,6 +1184,17 @@ export function ItOpsHome({ api, headers, onNavigate }: ItOpsHomeProps) {
               <span className="rounded-full bg-null-tealSoft px-2 py-0.5 text-xs font-medium text-null-tealDark" title="Sample data — one or more rows in this view are demonstration records, not live data.">
                 Sample data
               </span>
+            )}
+            {liveDevices.length > 0 && (
+              <button
+                type="button"
+                onClick={() => openDeviceList('Live endpoints', liveDevices)}
+                className="inline-flex items-center gap-1.5 rounded-full bg-[#E7F3EE] px-2 py-0.5 text-xs font-semibold text-null-success hover:bg-[#D8EEE4]"
+                title="Endpoints enrolled by the real agent — not sample data. Select to view."
+              >
+                <span className="inline-block h-1.5 w-1.5 rounded-full bg-null-success" aria-hidden />
+                Live · {liveDevices.length}
+              </button>
             )}
           </div>
           <p className="text-sm text-null-muted dark:text-[#8AA0B8]">
@@ -683,7 +1244,7 @@ export function ItOpsHome({ api, headers, onNavigate }: ItOpsHomeProps) {
               </label>
             ))}
           </div>
-          <p className="mt-2 text-xs text-null-muted dark:text-[#8AA0B8]">Saved in this browser (null_itops_sections).</p>
+          <p className="mt-2 text-xs text-null-muted dark:text-[#8AA0B8]">Saved in this browser (null_itops_sections_v2).</p>
         </div>
       )}
 
@@ -700,136 +1261,295 @@ export function ItOpsHome({ api, headers, onNavigate }: ItOpsHomeProps) {
         />
       )}
 
-      {hasAnyRows && sections.kpis && (
-        <div className="grid grid-cols-2 gap-4 lg:grid-cols-3 xl:grid-cols-6">
-          <KpiPanel
-            label="Total endpoints"
-            value={totalEndpoints}
-            sublabel="Enrolled, excluding decommissioned"
-            sparkline={enrollmentSeries.some((v) => v > 0) ? enrollmentSeries : undefined}
-            onClick={() => onNavigate('devices')}
-          />
-          <KpiPanel
-            label="Online endpoints"
-            value={health.online}
-            sublabel="Check-in within 1h"
-            accent="success"
-            onClick={() => onNavigate('devices')}
-          />
-          <KpiPanel
-            label="Offline endpoints"
-            value={health.offline}
-            sublabel="Enrolled, no check-in for 24h+"
-            accent={health.offline > 0 ? 'critical' : 'neutral'}
-            onClick={() => onNavigate('devices')}
-          />
-          <KpiPanel
-            label="Patch compliance"
-            value={compliancePct === null ? '—' : `${compliancePct}%`}
-            sublabel={compliancePct === null ? 'No patches to measure' : 'Deployed ÷ non-declined patches'}
-            trend={complianceTrend}
-            sparkline={complianceSeries.length > 1 ? complianceSeries.map((p) => p.value) : undefined}
-            accent={compliancePct === null ? 'neutral' : compliancePct >= 95 ? 'success' : 'warning'}
-            onClick={() => onNavigate('patches')}
-          />
-          <KpiPanel
-            label="Pending patches"
-            value={pendingPatches}
-            sublabel="Available, testing, approved"
-            sparkline={pendingPatchSeries.some((v) => v > 0) ? pendingPatchSeries : undefined}
-            accent={pendingPatches > 0 ? 'warning' : 'neutral'}
-            onClick={() => onNavigate('patches')}
-          />
-          <KpiPanel
-            label="Failed deployments"
-            value={deploymentCounts.failed}
-            sublabel="All time"
-            sparkline={failedDeploymentSeries.some((v) => v > 0) ? failedDeploymentSeries : undefined}
-            accent={deploymentCounts.failed > 0 ? 'critical' : 'neutral'}
-            onClick={() => onNavigate('patches', 'deployments')}
-          />
-        </div>
-      )}
-
-      {hasAnyRows && (sections.health || sections.compliance) && (
+      {/* Row 1 — command strip: fleet health + patch posture */}
+      {hasAnyRows && (sections.fleet || sections.patch) && (
         <div className="grid gap-6 lg:grid-cols-2">
-          {sections.health && (
-            <ChartContainer title="Endpoint health" subtitle="Online within 1h · attention 1–24h · offline 24h+ · suspended is degraded">
-              {totalEndpoints === 0 ? (
-                <EmptyState icon="server" title="No endpoints enrolled" description="Enroll an endpoint agent to see fleet health." />
-              ) : (
-                <DonutChart
-                  centerLabel={String(totalEndpoints)}
-                  segments={[
-                    { value: health.online, color: NULL_COLORS.success, label: 'Online' },
-                    { value: health.attention, color: NULL_COLORS.warning, label: 'Attention' },
-                    { value: health.offline, color: NULL_COLORS.critical, label: 'Offline' },
-                    { value: health.degraded, color: NULL_COLORS.info, label: 'Degraded' },
-                  ]}
-                />
-              )}
+          {sections.fleet && (
+            <ChartContainer
+              title="Fleet health"
+              subtitle="Check-in health across the fleet — select any segment to see its endpoints"
+            >
+                {totalEndpoints === 0 ? (
+                  <EmptyState icon="server" title="No endpoints enrolled" description="Enroll an endpoint agent to see fleet health." />
+                ) : (
+                  <div className="flex flex-wrap items-start gap-6">
+                    <ClickableDonut
+                      centerLabel={String(totalEndpoints)}
+                      segments={[
+                        { value: health.online, color: HEALTH_COLOR.online, label: 'Online', onSelect: () => openDeviceList('Online endpoints', healthBuckets.online) },
+                        { value: health.attention, color: HEALTH_COLOR.attention, label: 'Attention', onSelect: () => openDeviceList('Endpoints needing attention', healthBuckets.attention) },
+                        { value: health.offline, color: HEALTH_COLOR.offline, label: 'Offline', onSelect: () => openDeviceList('Offline endpoints', healthBuckets.offline) },
+                        { value: health.degraded, color: HEALTH_COLOR.degraded, label: 'Degraded', onSelect: () => openDeviceList('Suspended endpoints', healthBuckets.degraded) },
+                      ]}
+                    />
+                    <div className="min-w-52 flex-1 space-y-3">
+                      <div>
+                        <p className="text-2xl font-bold leading-tight text-null-ink dark:text-white">
+                          {totalEndpoints} endpoints
+                        </p>
+                        <p className="text-sm text-null-muted dark:text-[#8AA0B8]">
+                          {health.online} online now · {health.attention + health.offline} need attention
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-medium text-null-muted dark:text-[#8AA0B8]">
+                          Enrollments per {range === '7d' ? 'day' : 'week'} · {range}
+                        </p>
+                        {enrollmentSeries.some((v) => v > 0) ? (
+                          <div className="mt-1 h-8">
+                            <Sparkline series={enrollmentSeries} ariaLabel={`Enrollment trend: ${enrollmentSeries.join(', ')}`} />
+                          </div>
+                        ) : (
+                          <p className="mt-1 text-xs text-null-muted dark:text-[#8AA0B8]">No enrollments in range.</p>
+                        )}
+                      </div>
+                      <p className="text-xs leading-relaxed text-null-muted dark:text-[#8AA0B8]">
+                        Health is check-in only: online = check-in within 1h, attention = 1–24h, offline =
+                        24h+ or never, degraded = suspended. Sample check-ins are a fixed snapshot from
+                        seeding — nothing re-checks in — so the online count falls as time passes.
+                      </p>
+                    </div>
+                  </div>
+                )}
+                {/* Live endpoint spotlight — always visible, never buried in a bucket */}
+                <div className="mt-4 border-t border-null-line pt-3 dark:border-white/10">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-null-muted dark:text-[#8AA0B8]">
+                    Live endpoint — not sample data
+                  </p>
+                  {liveDevices.length === 0 ? (
+                    <p className="mt-2 text-sm text-null-muted dark:text-[#8AA0B8]">
+                      No live endpoints enrolled — every device on this screen is sample data.
+                    </p>
+                  ) : (
+                    <ul className="mt-2 space-y-2">
+                      {liveDevices.map((d) => (
+                        <li key={d.id}>
+                          <button
+                            type="button"
+                            onClick={() => openDeviceDetail(d)}
+                            className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-null-line px-3 py-2 text-left hover:bg-null-cloud dark:border-white/10 dark:hover:bg-null-navy2"
+                          >
+                            {liveBadge}
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-sm font-medium text-null-ink dark:text-white">
+                                {d.hostname || d.device_id}
+                              </span>
+                              <span className="block truncate text-xs text-null-muted dark:text-[#8AA0B8]">
+                                {deviceHealthText(d)} · last check-in {lastCheckinText(d)}
+                              </span>
+                            </span>
+                            <span className="text-xs text-null-muted dark:text-[#8AA0B8]">
+                              Agent reports when it runs — a stale check-in is expected, not a fault.
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
             </ChartContainer>
           )}
-          {sections.compliance && (
-            <ChartContainer title="Patch compliance trend" subtitle={`${range === '7d' ? 'Daily' : 'Weekly'} cumulative compliance · dashed line is the 95% target`}>
-              {complianceSeries.length < 2 ? (
-                <EmptyState
-                  icon="check-circle"
-                  title="Not enough history for a trend"
-                  description="Compliance needs patches created across at least two buckets in the selected range."
-                />
-              ) : (
-                <div className="h-44">
-                  <LineChart
-                    series={complianceSeries.map((p) => p.value)}
-                    labels={complianceSeries.map((p) => p.label)}
-                    targetLine={95}
-                  />
+          {sections.patch && (
+            <ChartContainer
+              title="Patch posture"
+              subtitle="Compliance and the full patch inventory — select any bar to see its patches"
+            >
+                <div className="flex flex-wrap items-end justify-between gap-3">
+                  <div>
+                    <p className="text-3xl font-bold leading-tight text-null-ink dark:text-white">
+                      {compliancePct === null ? '—' : `${compliancePct}%`}
+                      <span className="ml-2 text-sm font-medium text-null-muted dark:text-[#8AA0B8]">compliant</span>
+                    </p>
+                    <p className="mt-0.5 text-xs text-null-muted dark:text-[#8AA0B8]">
+                      {compliancePct === null
+                        ? 'No patches to measure'
+                        : `${patchCounts.deployed} of ${complianceDenom} non-declined patches deployed · target 95%`}
+                    </p>
+                  </div>
+                  {complianceTrend && (
+                    <span className={`text-xs font-medium ${complianceTrend.good ? 'text-null-success' : 'text-null-critical'}`}>
+                      {complianceTrend.direction === 'up' ? '↑' : complianceTrend.direction === 'down' ? '↓' : '→'}{' '}
+                      {complianceTrend.value}
+                    </span>
+                  )}
                 </div>
-              )}
+                {complianceSeries.length > 1 ? (
+                  <div className="mt-2 h-10">
+                    <Sparkline series={complianceSeries.map((p) => p.value)} color="#17C3B2" ariaLabel={`Compliance trend: ${complianceSeries.map((p) => p.value).join(', ')}`} />
+                  </div>
+                ) : (
+                  <p className="mt-2 text-xs text-null-muted dark:text-[#8AA0B8]">
+                    Not enough history for a compliance trend yet.
+                  </p>
+                )}
+                <div className="mt-4">
+                  <ClickableBarRows rows={patchBarRows} max={patches.length || 1} />
+                </div>
+                <p className="mt-3 text-xs leading-relaxed text-null-muted dark:text-[#8AA0B8]">
+                  {patches.length} patches accounted for. Compliance = deployed ÷ (deployed + available +
+                  testing + approved). Declined patches are out of scope; failed patches are deployment
+                  failures, counted on the pipeline panel — not a compliance judgment.
+                </p>
             </ChartContainer>
           )}
         </div>
       )}
 
-      {hasAnyRows && (sections.os || sections.deployments || sections.enrollment) && (
-        <div className="grid gap-6 lg:grid-cols-3">
-          {sections.os && (
-            <ChartContainer title="OS distribution" subtitle="Grouped by platform — OS versions aren't shown">
-              {osDistribution.length === 0 ? (
-                <EmptyState icon="server" title="No devices" description="No enrolled devices to distribute." />
-              ) : (
-                <div className="h-44">
-                  <BarChart bars={osDistribution.map((d) => ({ label: d.label, value: d.value }))} />
+      {/* Row 2 — infrastructure: servers + endpoint groups */}
+      {hasAnyRows && (sections.servers || sections.groups) && (
+        <div className="grid gap-6 lg:grid-cols-2">
+          {sections.servers && (
+            <ChartContainer
+              title="Servers"
+              subtitle="Every server, with its recorded health — select a row or a count to inspect it"
+            >
+                <div className="mb-3 flex flex-wrap gap-2">
+                  {(
+                    [
+                      ['healthy', serverCounts.healthy, NULL_COLORS.success],
+                      ['degraded', serverCounts.degraded, NULL_COLORS.warning],
+                      ['down', serverCounts.down, NULL_COLORS.critical],
+                    ] as const
+                  ).map(([label, count, color]) => (
+                    <button
+                      key={label}
+                      type="button"
+                      onClick={() =>
+                        openServerList(
+                          `${label[0].toUpperCase()}${label.slice(1)} servers`,
+                          servers.filter((s) => (s.health_status || '').toLowerCase() === label),
+                        )
+                      }
+                      className="inline-flex items-center gap-1.5 rounded-full border border-null-line px-2.5 py-1 text-xs font-medium text-null-ink hover:bg-null-cloud dark:border-white/10 dark:text-white dark:hover:bg-null-navy2"
+                    >
+                      <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: color }} aria-hidden />
+                      {label} · {count}
+                    </button>
+                  ))}
+                  <span className="inline-flex items-center rounded-full bg-null-cloud px-2.5 py-1 text-xs text-null-muted dark:bg-null-navy2 dark:text-[#8AA0B8]">
+                    {servers.length} total
+                  </span>
                 </div>
-              )}
+                {servers.length === 0 ? (
+                  <EmptyState icon="server" title="No servers" description="No servers recorded yet." />
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-null-line text-left text-null-muted dark:border-white/10 dark:text-[#8AA0B8]">
+                          <th className="py-2 pr-2 font-semibold">Server</th>
+                          <th className="py-2 pr-2 font-semibold">Role</th>
+                          <th className="py-2 pr-2 font-semibold">OS</th>
+                          <th className="py-2 pr-2 font-semibold">Health</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {servers.map((s) => (
+                          <tr
+                            key={s.id}
+                            onClick={() => openServerDetail(s)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault()
+                                openServerDetail(s)
+                              }
+                            }}
+                            tabIndex={0}
+                            role="button"
+                            aria-label={`${s.hostname || s.title || 'Unnamed server'} — ${s.health_status || 'unknown health'} — show details`}
+                            className="null-table-row cursor-pointer border-b border-null-line last:border-0 hover:bg-null-cloud dark:border-white/10 dark:hover:bg-null-navy2"
+                          >
+                            <td className="py-2 pr-2 font-medium text-null-ink dark:text-white">
+                              {s.hostname || s.title || 'Unnamed'}
+                            </td>
+                            <td className="py-2 pr-2 text-null-muted dark:text-[#8AA0B8]">{s.role || '—'}</td>
+                            <td className="py-2 pr-2 text-null-muted dark:text-[#8AA0B8]">{s.os || '—'}</td>
+                            <td className="py-2 pr-2">
+                              <StatusBadge value={s.health_status} size="sm" />
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                <p className="mt-3 text-xs leading-relaxed text-null-muted dark:text-[#8AA0B8]">
+                  Health is the last recorded health_status. No live CPU, memory, or disk telemetry is
+                  collected for servers, so this is a recorded state, not a live probe.
+                </p>
             </ChartContainer>
           )}
-          {sections.deployments && (
-            <ChartContainer title="Deployment outcomes" subtitle="All deployments, by final status">
-              {deployments.length === 0 ? (
-                <EmptyState icon="download" title="No deployments" description="No patch deployments recorded yet." />
-              ) : (
-                <div className="h-44">
-                  <BarChart
-                    bars={[
-                      { label: 'Deployed', value: deploymentCounts.deployed, color: NULL_COLORS.success },
-                      { label: 'Failed', value: deploymentCounts.failed, color: NULL_COLORS.critical },
-                    ]}
-                  />
+          {sections.groups && (
+            <ChartContainer
+              title="Endpoint groups"
+              subtitle="Department, device-group and OS performance — select a row to see its endpoints"
+            >
+                <Tabs
+                  items={[
+                    { id: 'departments', label: 'Departments' },
+                    { id: 'groups', label: 'Device groups' },
+                    { id: 'os', label: 'Operating systems' },
+                  ]}
+                  active={groupTab}
+                  onChange={(id) => setGroupTab(id as 'departments' | 'groups' | 'os')}
+                />
+                <div className="mt-3">
+                  {activeGroups.length === 0 ? (
+                    <EmptyState icon="users" title="No endpoints" description="No enrolled endpoints to group." />
+                  ) : (
+                    <ClickableBarRows rows={groupRows} labelWidthClass="w-32" />
+                  )}
                 </div>
-              )}
+                <p className="mt-3 text-xs leading-relaxed text-null-muted dark:text-[#8AA0B8]">
+                  Groups come from the attributes the agent or the seed recorded. Counts sum to{' '}
+                  {totalEndpoints} endpoints. The live endpoint carries no department or group, so it
+                  appears under Unassigned.
+                </p>
             </ChartContainer>
           )}
-          {sections.enrollment && (
-            <ChartContainer title="Enrollment activity" subtitle={`${range === '7d' ? 'Daily' : 'Weekly'} enrollments in range`}>
-              {enrollmentSeries.every((v) => v === 0) ? (
-                <EmptyState icon="plus" title="No enrollments in range" description="No devices enrolled in the selected range." />
-              ) : (
-                <div className="h-44">
-                  <BarChart bars={buckets.map((b, i) => ({ label: b.label, value: enrollmentSeries[i] }))} />
+        </div>
+      )}
+
+      {/* Row 3 — deployment pipeline + operational workload */}
+      {hasAnyRows && (sections.pipeline || sections.workload) && (
+        <div className="grid gap-6 lg:grid-cols-2">
+          {sections.pipeline && (
+            <ChartContainer
+              title="Deployment pipeline"
+              subtitle="All deployments by stage — every deployment is accounted for"
+            >
+                {deployments.length === 0 ? (
+                  <EmptyState icon="download" title="No deployments" description="No patch deployments recorded yet." />
+                ) : (
+                  <>
+                    <ClickableBarRows rows={pipelineRows} max={deployments.length} />
+                    <p className="mt-3 text-sm text-null-ink dark:text-white">
+                      {deploymentCounts.deployed} deployed · {deploymentCounts.failed} failed ·{' '}
+                      {inFlightDeployments} in flight ({deploymentCounts.scheduled} scheduled,{' '}
+                      {deploymentCounts.approved} approved, {deploymentCounts.deploying} deploying) ·{' '}
+                      {deploymentCounts.declined} declined
+                    </p>
+                    <p className="mt-1 text-xs leading-relaxed text-null-muted dark:text-[#8AA0B8]">
+                      Failed deployments are the retry queue; declined deployments were rejected before
+                      rollout. Select any stage to see the deployments in it.
+                    </p>
+                  </>
+                )}
+            </ChartContainer>
+          )}
+          {sections.workload && (
+            <ChartContainer
+              title="Operational workload"
+              subtitle="Open work, grounded in the records on this screen — select a row to work it"
+            >
+                <ClickableBarRows rows={workloadRows} />
+                <div className="mt-3 border-t border-null-line pt-3 dark:border-white/10">
+                  <p className="text-xs leading-relaxed text-null-muted dark:text-[#8AA0B8]">
+                    <span className="font-semibold text-null-ink dark:text-white">Mean time to resolve: —</span>{' '}
+                    Deployment records carry no resolved timestamp, so MTTR cannot be measured from these
+                    records.
+                  </p>
                 </div>
-              )}
             </ChartContainer>
           )}
         </div>
@@ -852,6 +1572,19 @@ export function ItOpsHome({ api, headers, onNavigate }: ItOpsHomeProps) {
           )}
         </section>
       )}
+
+      <DetailDrawer open={drawer !== null} onClose={closeDrawer} title={drawer?.title ?? ''}>
+        {drawer?.body}
+      </DetailDrawer>
+      <EndpointDetailDrawer
+        open={detailDevice !== null}
+        device={detailDevice}
+        api={api}
+        headers={headers}
+        canRunCommands={userRole === 'owner' || userRole === 'admin'}
+        userRole={userRole}
+        onClose={() => setDetailDevice(null)}
+      />
     </div>
   )
 }

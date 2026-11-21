@@ -39,15 +39,22 @@ class EnrollRequest(BaseModel):
 
 @router.get("/", response_model=list[DeviceOut])
 def list_devices(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    devices = db.query(Device).filter(Device.tenant_id == current_user.tenant_id).all()
+    # Newest first, so row order is stable — the Endpoints table
+    # renders this list as-is, with no client-side sort.
+    devices = db.query(Device).filter(Device.tenant_id == current_user.tenant_id).order_by(Device.created_at.desc()).all()
     return devices
 
 @router.get("/stats")
 def device_stats(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     total = db.query(Device).filter(Device.tenant_id == current_user.tenant_id).count()
     recent = datetime.utcnow() - timedelta(hours=1)
+    # Online means enrolled AND checked in within the last hour —
+    # the same rule the home screens use. Suspended devices used to
+    # count here if they had a fresh check-in, which disagreed with
+    # every other surface.
     online = db.query(Device).filter(
         Device.tenant_id == current_user.tenant_id,
+        Device.enrollment_status == "enrolled",
         Device.last_checkin_at >= recent
     ).count()
     return {"total": total, "online": online, "stale": total - online}

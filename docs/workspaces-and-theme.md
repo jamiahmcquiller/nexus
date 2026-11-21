@@ -50,7 +50,7 @@ in screens:
   (`navy`, `teal`, `cloud`, `slate`, `border`, `success`,
   `warning`, `critical`, `info`, `pending`) and Inter/Manrope fonts.
 - `frontend/src/index.css` — CSS variables for light and dark
-  modes, density (`compact` / `comfortable` / `spacious`), shared
+  modes, shared
   card/input/table surfaces, and visible keyboard focus.
 
 ### Palette
@@ -89,9 +89,6 @@ alerts, and notifications — see `statusTone()` in `theme.ts`.
   `localStorage` (`nexus_theme`). Dark mode uses adjusted navy /
   charcoal surfaces with the same teal accents and the same status
   colors, so status meaning never changes with theme.
-- **Density** — compact / comfortable / spacious, remembered in
-  `localStorage` (`nexus_density`), applied to cards and rows
-  everywhere.
 - **Typography** — Manrope for headings, Inter for body text.
 
 ### What changed in the console
@@ -100,8 +97,8 @@ alerts, and notifications — see `statusTone()` in `theme.ts`.
   labels, teal left indicator on the active item, lighter navy on
   hover/selected; workspace switcher at the top of the sidebar.
 - Top navigation: white, subtle gray bottom border, search that
-  filters the current workspace's sections, theme and density
-  controls, signed-in user and role.
+  filters the current workspace's sections, theme controls,
+  signed-in user and role.
 - Main workspace: Cloud Gray background, white cards, teal primary
   buttons, white secondary buttons with gray borders, critical-red
   destructive actions.
