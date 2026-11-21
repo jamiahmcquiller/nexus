@@ -632,6 +632,35 @@ class SystemToolJob(Base):
     created_at = _created()
 
 
+# ------------------------------------------------- agent command queue
+# Remote execution + Wake-on-LAN, driven by the endpoint agent.
+# The backend only queues commands; it never executes anything itself.
+# - kind "shell"/"powershell": `command` is the script the agent runs.
+# - kind "wol": `command` is the target device's MAC address; any online
+#   agent in the tenant picks it up and sends the magic packet on its LAN.
+# device_id null means "any online agent in this tenant may claim it"
+# (used for WoL, where the sender is whichever agent is on that LAN).
+# Every command records who created it and its full result, so the queue
+# itself is the audit trail; creation also writes an AuditEvent.
+class AgentCommand(Base):
+    __tablename__ = "agent_commands"
+    id = _id()
+    tenant_id = _tenant()
+    device_id = Column(UUID(as_uuid=True), ForeignKey("devices.id"), nullable=True)
+    target_device_id = Column(UUID(as_uuid=True), ForeignKey("devices.id"), nullable=True)
+    kind = Column(String, default="shell")  # shell, powershell, wol
+    command = Column(Text, nullable=False)
+    status = Column(String, default="pending")  # pending, claimed, succeeded, failed
+    result = Column(Text)
+    exit_code = Column(Integer)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    claimed_by_device_id = Column(UUID(as_uuid=True), ForeignKey("devices.id"), nullable=True)
+    attributes = _attrs()
+    created_at = _created()
+    claimed_at = Column(DateTime)
+    completed_at = Column(DateTime)
+
+
 # ------------------------------------------------------------- imaging
 class OsImage(Base):
     __tablename__ = "os_images"

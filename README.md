@@ -123,8 +123,8 @@ organization data.
 - [x] Background scheduler / worker for deployments, hunts, and remediation workflows (v0.3.0 — see `docs/scheduler.md`; run `python -m app.worker`, or `docker compose -f infra/docker-compose.yml up -d` for API + worker)
 - [x] Two administrator workspaces + brand theme (v0.4.0 — see `docs/workspaces-and-theme.md`): IT Operations and Security Operations, separate navigation and home dashboards, switch on one sign-in, role-based authorization; Midnight Navy / Teal / Cloud Gray system, light/dark mode, density
 - [x] GRC workspace (v0.5.0 — see `docs/grc.md`): enterprise Governance, Risk & Compliance — frameworks, control library, assessments, evidence, findings & exceptions, risk register, remediation plans, compliance reports, audit schedule, control mapping, settings, with an overview, workflow transitions, AuditEvent history, and idempotent demo-data seeding/clearing (demo rows always flagged `is_demo`)
-- [ ] Go agent prototype (read-only inventory)
-- [ ] End-to-end enrollment flow
+- [x] Endpoint agent v0.3.0 (see `agent/README.md`): Go agent for Windows/macOS/Linux — enrollment, hardware/OS/software inventory upload, heartbeat, remote command execution (owner/admin-authorized, audit-logged, 5-minute timeout), and Wake-on-LAN via any online agent on the same LAN; backend command queue at `/api/v1/agent` (45 backend tests passing)
+- [x] End-to-end enrollment flow (agent enroll → inventory → heartbeat verified against a live backend; remote command + WoL round-trips verified)
 - [ ] Vendor patch / CVE / threat-intel feed integrations
 - [ ] Endpoint enforcement in the agent (patch / AV / EDR / DLP)
 
