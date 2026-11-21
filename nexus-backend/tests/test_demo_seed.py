@@ -497,3 +497,62 @@ def test_seed_counts_reconcile_with_home_screens(db_engine):
         for stamp in stamps:
             t = _parse(stamp)
             assert now - timedelta(days=91) <= t <= now + timedelta(minutes=5), stamp
+
+
+def test_seed_online_bucket_survives_read_delay(db_engine):
+    """Fresh seed still shows 30 online when stats are read minutes later.
+
+    Regression test for the live 29-online reading (Nov 21, 2026):
+    /devices/stats counts a device online only while last_checkin_at
+    is within the last hour *at query time*, and minutes pass between
+    the seed and the home screen reading stats. The old seed stamped
+    the oldest online device 58 min back, so it aged past the hour
+    before the read and showed as attention (29 online / 14
+    attention). The seed now caps online check-ins at 50 min, leaving
+    a 10-minute margin — evaluate the buckets as of 5 minutes after
+    the seed and they must still read 30 / 12 / 12 / 6.
+    """
+    from collections import Counter
+    from datetime import datetime, timedelta, timezone
+
+    client = _client(db_engine)
+    headers, _ = _auth(db_engine)
+    # Reference instant just before the seed: the seed stamps check-ins
+    # relative to its own "now", a fraction of a second after this.
+    now_before_seed = datetime.now(timezone.utc)
+    body = client.post("/api/v1/demo/seed", headers=headers).json()
+    assert body["seeded"] is True
+    r = client.get("/api/v1/devices/", headers=headers)
+    assert r.status_code == 200
+    devices = r.json()
+
+    def _parse(value):
+        v = value if value.endswith("Z") or "+" in value[10:] else value + "Z"
+        return datetime.fromisoformat(v.replace("Z", "+00:00"))
+
+    # The home screen reads stats minutes after the seed lands.
+    later = datetime.now(timezone.utc) + timedelta(minutes=5)
+    health = Counter()
+    for d in devices:
+        if (d["enrollment_status"] or "").lower() == "suspended":
+            health["degraded"] += 1
+            continue
+        age = (later - _parse(d["last_checkin_at"])).total_seconds()
+        if age <= 3600:
+            health["online"] += 1
+        elif age <= 86400:
+            health["attention"] += 1
+        else:
+            health["offline"] += 1
+    assert dict(health) == {"online": 30, "attention": 12, "offline": 12, "degraded": 6}
+    # Pin the margin itself: no online device may be older than 50 min
+    # at seed time, so up to 10 minutes of read delay cannot flip one.
+    # (5s slack covers the POST round-trip between now_before_seed and
+    # the seed's own "now"; the old 58-min stamp would read ~3480s.)
+    oldest_online = max(
+        (now_before_seed - _parse(d["last_checkin_at"])).total_seconds()
+        for d in devices
+        if (d["enrollment_status"] or "").lower() == "enrolled"
+        and (now_before_seed - _parse(d["last_checkin_at"])).total_seconds() <= 3600
+    )
+    assert oldest_online <= 50 * 60 + 5

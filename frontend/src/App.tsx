@@ -1,12 +1,15 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import axios from 'axios'
-import { statusBadgeClasses, statusTone, THEME_STORAGE_KEY, WORKSPACE_STORAGE_KEY, TOKEN_STORAGE_KEY } from './theme'
+import { THEME_STORAGE_KEY, WORKSPACE_STORAGE_KEY, TOKEN_STORAGE_KEY } from './theme'
 import GrcWorkspace from './GrcWorkspace'
 import type { ThemeMode } from './theme'
 import { WORKSPACES, getWorkspace } from './workspaces'
 import type { WorkspaceDef, WorkspaceId } from './workspaces'
-import { Breadcrumbs, Icon, ToastProvider, useToast, EndpointDetailDrawer, RemediationConfigManager, SendConfigurationModal } from './components'
+import { Breadcrumbs, Icon, ModulePage, ToastProvider, useToast, EndpointDetailDrawer, RemediationConfigManager, SendConfigurationModal } from './components'
 import type { IconName } from './components'
+import { OPERATIONS_PRESENTATION } from './moduleConfig.operations'
+import { SECURITY_PRESENTATION } from './moduleConfig.security'
+import type { ModulePresentation } from './modulePresentation'
 import { ItOpsHome } from './homes/ItOpsHome'
 import SecOpsHome from './homes/SecOpsHome'
 import { NULL_LOGO_SRC } from './logoDataUri'
@@ -269,6 +272,28 @@ const MODULES: ModuleDef[] = [
   },
   { id: 'policies', label: 'Policies', description: 'Cross-module policy definitions (patch, compliance, app control, encryption, browser, MDM).', endpoint: '/api/v1/policies/', workspace: 'security' },
 ]
+
+// Rolled-out module presentation: per-endpoint columns, detail
+// fields, stat labels, and empty states in the approved NULL
+// design language. Keyed by API endpoint path. Sections without
+// an entry fall back to the generic presentation below.
+const MODULE_PRESENTATION: Record<string, ModulePresentation> = {
+  ...OPERATIONS_PRESENTATION,
+  ...SECURITY_PRESENTATION,
+}
+
+const FALLBACK_PRESENTATION: ModulePresentation = {
+  columns: [
+    { key: 'name', label: 'Name', kind: 'name' },
+    { key: 'detail', label: 'Detail', kind: 'detail' },
+    { key: 'status', label: 'Status', kind: 'status' },
+  ],
+  detailFields: ['status', 'created_at'],
+  statLabels: { total: 'Total' },
+  emptyTitle: 'No records yet',
+  emptyDescription: 'No records exist in this section yet.',
+}
+
 
 // Sidebar navigation groups (brief §6). Each group lists module ids
 // in display order; groups with no visible modules are not rendered.
@@ -1097,143 +1122,63 @@ function Console() {
           ) : module === 'compliance' ? (
             <GrcWorkspace api={API} headers={headers} />
           ) : current ? (
-            <div>
-              <div className="null-card mb-6">
-                <h2 className="text-lg font-semibold mb-1 text-null-ink dark:text-white">{current.label}</h2>
-                <p className="text-sm text-null-muted dark:text-[#8AA0B8] mb-4">{current.description}</p>
-                {current.subsections && (
-                  <div className="flex flex-wrap gap-2 mb-4">
-                    {current.subsections.map((s) => (
-                      <button
-                        key={s.id}
-                        onClick={() => setSubsection(s.id)}
-                        className={`px-3 py-1 rounded-full text-xs border ${(subsection || current.subsections![0].id) === s.id ? 'bg-null-teal text-white border-null-teal' : 'text-null-ink hover:bg-null-cloud dark:text-[#8AA0B8]'}`}
-                      >
-                        {s.label}
-                      </button>
-                    ))}
-                  </div>
-                )}
-                {/* The remediation-configurations subsection renders its
-                    own manager (create with script content + send
-                    history) instead of the generic stats / Add / Items
-                    table, whose Add box can only set a name. */}
-                {endpoint === '/api/v1/remediation-configurations/' ? (
-                  <RemediationConfigManager api={API} headers={headers} canWrite={canWrite} canDelete={canDelete} />
-                ) : (
-                  <>
-                <div className="grid grid-cols-3 gap-4">
-                  {Object.entries(stats).map(([k, v]) => (
-                    <div key={k} className="border border-null-line rounded p-4">
-                      <div className="text-2xl font-bold text-null-ink dark:text-white">{String(v)}</div>
-                      <div className="text-sm text-null-muted dark:text-[#8AA0B8] capitalize">{k}</div>
+            endpoint === '/api/v1/remediation-configurations/' ? (
+              <div>
+                <div className="null-card mb-6">
+                  <h2 className="text-lg font-semibold mb-1 text-null-ink dark:text-white">{current.label}</h2>
+                  <p className="text-sm text-null-muted dark:text-[#8AA0B8] mb-4">{current.description}</p>
+                  {current.subsections && (
+                    <div className="flex flex-wrap gap-2 mb-4">
+                      {current.subsections.map((s) => (
+                        <button
+                          key={s.id}
+                          onClick={() => setSubsection(s.id)}
+                          className={`px-3 py-1 rounded-full text-xs border ${(subsection || current.subsections![0].id) === s.id ? 'bg-null-teal text-white border-null-teal' : 'text-null-ink hover:bg-null-cloud dark:text-[#8AA0B8]'}`}
+                        >
+                          {s.label}
+                        </button>
+                      ))}
                     </div>
-                  ))}
-                  {Object.keys(stats).length === 0 && <div className="text-null-muted dark:text-[#8AA0B8]">No stats yet</div>}
+                  )}
+                  {/* The remediation-configurations subsection renders its
+                      own manager (create with script content + send
+                      history) instead of the generic module page. */}
+                  <RemediationConfigManager api={API} headers={headers} canWrite={canWrite} canDelete={canDelete} />
                 </div>
-                {/* The scheduler endpoint is read-only (runs list only),
-                    so there is no Add box here — just the Run now button. */}
-                {module !== 'scheduler' && canWrite && (
-                  <div className="flex gap-2 mt-4">
-                    <input className="null-input flex-1 p-2 text-sm" placeholder={editingId ? 'Edit record name / title' : 'New record name / title'} value={newName} onChange={(e) => setNewName(e.target.value)} />
-                    <button className="bg-null-teal hover:bg-null-tealDark text-white px-4 rounded text-sm font-medium" onClick={createItem}>{editingId ? 'Save' : 'Add'}</button>
-                    {editingId && (
-                      <button className="border border-null-line rounded px-4 text-sm" onClick={cancelEdit}>Cancel</button>
-                    )}
-                  </div>
-                )}
-                {module === 'scheduler' && (
-                  <div className="flex gap-2 mt-4">
-                    <button className="text-white px-4 rounded text-sm font-medium" style={{ background: '#218568' }} onClick={runSchedulerNow}>Run now</button>
-                  </div>
-                )}
-                  </>
-                )}
               </div>
-              {endpoint !== '/api/v1/remediation-configurations/' && (
-              <div className="null-card">
-                <h3 className="font-semibold mb-3 text-null-ink dark:text-white">Items</h3>
-                {items.length === 0 ? (
-                  <p className="text-null-muted dark:text-[#8AA0B8]">No records yet. Add one above, or ingest data from an enrolled endpoint agent.</p>
-                ) : (
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="text-left text-null-muted border-b border-null-line dark:text-[#8AA0B8]">
-                        <th className="py-2 pr-2">Name</th>
-                        <th className="py-2 pr-2">Detail</th>
-                        <th className="py-2 pr-2">Status</th>
-                        <th className="py-2">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {items.map((item) => {
-                        // Devices carry their workflow state in
-                        // enrollment_status, not status — show that.
-                        const effStatus = item.status || item.enrollment_status || ''
-                        const statusOptions = module === 'devices' ? DEVICE_STATUSES : STATUS_OPTIONS
-                        const badge = statusBadgeClasses(item.severity || effStatus)
-                        return (
-                          <tr key={item.id} className="null-table-row border-b border-null-line align-top">
-                            <td className="py-2 pr-2 font-medium">{displayName(item)}</td>
-                            <td className="py-2 pr-2 text-null-muted dark:text-[#8AA0B8]">
-                              {displayDetail(item)}
-                              {item.severity && (
-                                <span className="ml-2 text-xs px-2 py-0.5 rounded-full font-medium" style={{ color: badge.color, background: badge.background }}>
-                                  {item.severity}
-                                </span>
-                              )}
-                            </td>
-                            <td className="py-2 pr-2">
-                              {module === 'scheduler' ? (
-                                <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ color: badge.color, background: badge.background }}>
-                                  {effStatus || '—'}
-                                </span>
-                              ) : (
-                                <span className="inline-flex items-center gap-1.5">
-                                  <span className="inline-block w-2 h-2 rounded-full" style={{ background: statusBadgeClasses(effStatus).color }} title={`Status tone: ${statusTone(effStatus)}`} />
-                                  <select
-                                    className="null-input !w-auto px-2 py-1 text-xs"
-                                    value={effStatus}
-                                    onChange={(e) => setStatus(item, e.target.value)}
-                                    aria-label={`Status for ${displayName(item)}`}
-                                    disabled={!canWrite}
-                                  >
-                                    <option value="">{effStatus || '—'}</option>
-                                    {statusOptions.filter((s) => s !== effStatus).map((s) => (
-                                      <option key={s} value={s}>{s}</option>
-                                    ))}
-                                  </select>
-                                </span>
-                              )}
-                            </td>
-                            <td className="py-2">
-                              <div className="flex flex-wrap gap-1">
-                                {module === 'devices' && (
-                                  <button className="border border-null-line rounded px-2 py-1 text-xs hover:bg-null-cloud" onClick={() => setDetailDevice(item)}>View details</button>
-                                )}
-                                {endpoint === '/api/v1/vulnerabilities/' && canRunCommands && (
-                                  <button className="border border-null-line rounded px-2 py-1 text-xs hover:bg-null-cloud" title="Queue a remediation configuration's script as an agent command on the affected endpoint" onClick={() => setSendVuln(item)}>Send config</button>
-                                )}
-                                {workflowButtons(item).map((b) => (
-                                  <button key={b.action} className="border border-null-line rounded px-2 py-1 text-xs hover:bg-null-cloud" onClick={() => workflowAction(b.action, item)}>{b.label}</button>
-                                ))}
-                                {canWrite && module !== 'scheduler' && (
-                                  <button className="border border-null-line rounded px-2 py-1 text-xs hover:bg-null-cloud" onClick={() => editItem(item)}>Edit</button>
-                                )}
-                                {canDelete && module !== 'scheduler' && (
-                                  <button className="border rounded px-2 py-1 text-xs hover:bg-null-cloud" style={{ borderColor: '#E5AFB0', color: '#C64D4D' }} onClick={() => deleteItem(item)}>Delete</button>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-              )}
-            </div>
+            ) : (
+              <ModulePage
+                moduleId={current.id}
+                title={current.label}
+                description={current.description}
+                subsections={current.subsections || []}
+                activeSubsectionId={subsection || (current.subsections ? current.subsections[0].id : '')}
+                onSubsectionChange={setSubsection}
+                endpoint={endpoint}
+                items={items}
+                stats={stats}
+                presentation={MODULE_PRESENTATION[endpoint] || FALLBACK_PRESENTATION}
+                canWrite={canWrite}
+                canDelete={canDelete}
+                canRunCommands={canRunCommands}
+                isScheduler={module === 'scheduler'}
+                editingId={editingId}
+                newName={newName}
+                onNewNameChange={setNewName}
+                onCreate={createItem}
+                onCancelEdit={cancelEdit}
+                onEdit={editItem}
+                onDelete={deleteItem}
+                onSetStatus={setStatus}
+                workflowButtons={workflowButtons}
+                onWorkflow={workflowAction}
+                onViewDevice={setDetailDevice}
+                onSendConfig={setSendVuln}
+                onRunSchedulerNow={runSchedulerNow}
+                statusOptions={STATUS_OPTIONS}
+                deviceStatusOptions={DEVICE_STATUSES}
+              />
+            )
           ) : null}
         </main>
       </div>

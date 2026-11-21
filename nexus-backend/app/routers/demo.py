@@ -117,16 +117,22 @@ def _audit(db, action, current_user, counts):
 # steal a slot from the fresh half, or "online" would read 28 instead
 # of the intended 30. Resulting demo-only split (verified in
 # tests/test_demo_seed.py::test_seed_counts_reconcile_with_home_screens):
-#   online 30 (checked in 0–58 min ago) · attention 12 (2–20 h ago)
+#   online 30 (checked in 0–50 min ago) · attention 12 (2–20 h ago)
 #   offline 12 (25 h–5.6 d ago) · degraded 6 (suspended) = 60.
 # The attributes.health label uses the same four bucket names.
+# The 0–50 min online spread is deliberate, not 0–58: /devices/stats
+# counts a device online only while last_checkin_at is within the last
+# hour *at query time*, and minutes pass between the seed and the home
+# screen reading stats — the oldest online row (58 min at seed time)
+# aged past the hour and read as attention, so a fresh seed showed
+# 29 online live. A 10-minute margin absorbs that delay.
 def _checkin_age_min(enrolled_ordinal, suspended, index):
     if suspended:
         # Suspended devices are "degraded" whatever their check-in, so
         # give them a stale one (2–6 days) for realism; it feeds no KPI.
         return 2 * 24 * 60 + (index * 53) % (4 * 24 * 60)
     if enrolled_ordinal < 30:
-        return enrolled_ordinal * 2
+        return enrolled_ordinal * 50 // 29
     if enrolled_ordinal < 42:
         return 120 + (enrolled_ordinal - 30) * 100
     return 1500 + (enrolled_ordinal - 42) * 600

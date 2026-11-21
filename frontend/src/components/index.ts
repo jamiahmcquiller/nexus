@@ -23,6 +23,12 @@ export type { AttentionItem, AttentionSeverity } from './AttentionQueue'
 
 export { DetailDrawer } from './DetailDrawer'
 
+export { ModulePage } from './ModulePage'
+export type { ModulePageProps } from './ModulePage'
+
+export { RecordDetailDrawer } from './RecordDetailDrawer'
+export type { RecordDetailDrawerProps } from './RecordDetailDrawer'
+
 export { EndpointDetailDrawer } from './EndpointDetailDrawer'
 export type { EndpointDeviceRecord } from './EndpointDetailDrawer'
 
