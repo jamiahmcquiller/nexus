@@ -96,7 +96,15 @@ export function DataTable<T extends { id: string }>({
     setPage(0)
   }
 
-  const allSelected = pageRows.length > 0 && pageRows.every((r) => selectedIds!.includes(r.id))
+  // Guarded by `selectable`: ModulePage (and every other caller that
+  // does not pass selection props) renders the table with
+  // selectedIds undefined, so the non-null assertion below is only
+  // sound when selection is actually wired up. Without the guard,
+  // any page with rows crashes on first render — `pageRows.length >
+  // 0` is true while `selectedIds` is undefined — which is exactly
+  // how the Endpoints page blanked the whole app (the only module
+  // page with real rows); empty pages short-circuited and survived.
+  const allSelected = selectable && pageRows.length > 0 && pageRows.every((r) => selectedIds!.includes(r.id))
   const toggleAll = () => {
     if (!onSelect || !selectedIds) return
     const pageIds = pageRows.map((r) => r.id)
