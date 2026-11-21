@@ -3,7 +3,7 @@ from sqlalchemy.orm import sessionmaker, DeclarativeBase
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
-    database_url: str = "postgresql://nexus:nexus_dev@localhost:5432/nexus"
+    database_url: str = "postgresql+psycopg://nexus:nexus_dev@localhost:5432/nexus"
     secret_key: str = "dev-secret-change-in-production-nexus-2026"
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24
