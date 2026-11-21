@@ -1,6 +1,26 @@
+import logging
+import time
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .database import engine, Base
+
+log = logging.getLogger("nexus.main")
+
+# Create tables — with retries, because Postgres (docker compose) is
+# often still starting when the backend boots. Previously this ran
+# once at import and crashed the whole backend if the DB was not
+# ready yet, so port 8000 never listened and the frontend login
+# failed with a bare "Network Error".
+for _attempt in range(30):
+    try:
+        Base.metadata.create_all(bind=engine)
+        break
+    except Exception as exc:
+        log.warning("database not ready (%s); retrying in 2s", exc)
+        time.sleep(2)
+else:
+    raise RuntimeError("database never became ready; backend cannot start")
 from . import models  # noqa: F401  (registers core tables)
 from . import models_extended  # noqa: F401  (registers platform tables)
 from .routers import (

@@ -35,6 +35,21 @@ services:
         condition: service_healthy
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
+  # Console — Vite dev server. Its /api proxy forwards to the backend
+  # service (VITE_BACKEND_URL), so the browser only ever talks to
+  # this origin — no separate -8000 port to forward in Codespaces.
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    environment:
+      VITE_BACKEND_URL: http://backend:8000
+    ports:
+      - "5173:5173"
+    depends_on:
+      backend:
+        condition: service_started
+
   # Scheduler worker — runs patch deployments, threat hunts, remediation
   # workflows, and expiry housekeeping. Run exactly one replica: two
   # workers would both advance the same records (harmless by design,

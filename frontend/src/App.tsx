@@ -3,6 +3,11 @@ import axios from 'axios'
 
 const API = (() => {
   if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL
+  // In dev (npm run dev) use a relative URL: Vite proxies /api to the
+  // backend (see vite.config.ts), so the browser never has to reach
+  // the backend directly. This is the fix for login "Network Error"
+  // in Codespaces — no separate -8000 port to forward or expose.
+  if (import.meta.env.DEV) return ''
   if (typeof window !== 'undefined') {
     const host = window.location.hostname
     if (host.includes('app.github.dev')) {
@@ -14,6 +19,10 @@ const API = (() => {
   }
   return 'http://localhost:8000'
 })()
+
+// What the login page shows as the backend address. '' means
+// "same origin, via the Vite proxy".
+const BACKEND_LABEL = API || (typeof window !== 'undefined' ? window.location.origin : '')
 
 if (typeof window !== 'undefined') {
   console.log('[NEXUS] API base URL:', API)
@@ -250,6 +259,32 @@ function App() {
   const [items, setItems] = useState<any[]>([])
   const [newName, setNewName] = useState('')
   const [notice, setNotice] = useState('')
+  const [backendStatus, setBackendStatus] = useState<'checking' | 'ok' | 'unreachable'>('checking')
+
+  // On load, check whether the backend is actually reachable, so the
+  // login page can say so plainly instead of failing with a bare
+  // "Network Error" at login time.
+  const checkBackend = useCallback(async () => {
+    try {
+      await axios.get(`${API}/health`, { timeout: 5000 })
+      setBackendStatus('ok')
+    } catch {
+      setBackendStatus('unreachable')
+    }
+  }, [])
+
+  useEffect(() => { checkBackend() }, [checkBackend])
+
+  const describeAuthError = (err: any, what: string) => {
+    if (!err.response) {
+      // axios "Network Error": no response at all — backend down,
+      // wrong URL, or CORS/preflight blocked. This is the error Miah
+      // hit on login; say what to do instead of repeating it.
+      return `Cannot reach the backend at ${BACKEND_LABEL}. The backend is not running, or this page cannot reach it from here. Start it with "docker compose -f infra/docker-compose.yml up -d" or "./scripts/start-nexus.sh", wait for it to come up, then tap Retry below and try ${what} again.`
+    }
+    const msg = err.response?.data?.detail || err.message || `${what} failed`
+    return `${typeof msg === 'string' ? msg : JSON.stringify(msg)} (backend: ${BACKEND_LABEL})`
+  }
 
   const headers = token ? { Authorization: `Bearer ${token}` } : {}
   const current = MODULES.find(m => m.id === module) || MODULES[0]
@@ -289,8 +324,8 @@ function App() {
       localStorage.setItem('nexus_token', res.data.access_token)
       setError('')
     } catch (err: any) {
-      const msg = err.response?.data?.detail || err.message || 'Login failed'
-      setError(`${typeof msg === 'string' ? msg : JSON.stringify(msg)} (API: ${API})`)
+      if (!err.response) setBackendStatus('unreachable')
+      setError(describeAuthError(err, 'login'))
     }
   }
 
@@ -305,8 +340,8 @@ function App() {
       localStorage.setItem('nexus_token', res.data.access_token)
       setError('')
     } catch (err: any) {
-      const msg = err.response?.data?.detail || err.message || 'Registration failed'
-      setError(`${typeof msg === 'string' ? msg : JSON.stringify(msg)} (API: ${API})`)
+      if (!err.response) setBackendStatus('unreachable')
+      setError(describeAuthError(err, 'registration'))
     }
   }
 
@@ -399,6 +434,15 @@ function App() {
         <div className="bg-white p-8 rounded-lg shadow w-96">
           <h1 className="text-2xl font-semibold mb-2">NEXUS</h1>
           <p className="text-sm text-gray-500 mb-6">Unified IT & Security Platform</p>
+          {backendStatus === 'checking' && <p className="text-sm text-gray-500 mb-4">Checking backend…</p>}
+          {backendStatus === 'ok' && <p className="text-sm text-green-700 mb-4">Backend connected ({BACKEND_LABEL})</p>}
+          {backendStatus === 'unreachable' && (
+            <div className="bg-red-50 border border-red-200 rounded p-3 mb-4">
+              <p className="text-sm text-red-700 font-medium">Backend not reachable at {BACKEND_LABEL}</p>
+              <p className="text-xs text-red-600 mt-1">Start it with “docker compose -f infra/docker-compose.yml up -d” or “./scripts/start-nexus.sh”, wait for it to come up, then tap Retry.</p>
+              <button className="text-xs underline mt-2" onClick={checkBackend}>Retry backend check</button>
+            </div>
+          )}
           {error && <p className="text-red-600 text-sm mb-4">{error}</p>}
           <input className="w-full border p-2 mb-3 rounded" placeholder="Username" value={username} onChange={e => setUsername(e.target.value)} />
           <input className="w-full border p-2 mb-4 rounded" type="password" placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} />

@@ -18,7 +18,18 @@ nexus/
 
 ## Quick Start
 
-### GitHub Codespaces
+One command starts everything — Postgres, API, scheduler worker,
+and console — and checks the API actually answers:
+
+```bash
+./scripts/start-nexus.sh --docker
+```
+
+Then open the forwarded **5173** port (the console). In Codespaces,
+only 5173 needs to be open: the console proxies `/api` to the
+backend itself, so you do not need a separate -8000 port.
+
+Manual start (if you prefer the pieces separate):
 
 ```bash
 # From the repository root
@@ -39,16 +50,28 @@ npm install
 npm run dev -- --host 0.0.0.0
 ```
 
-Forward ports 8000 (backend) and 5173 (frontend) in the Ports panel if they are not auto-forwarded.
+### Login says "Network Error" / "Backend not reachable"?
 
-### Local Development
+That means the console loaded but the backend did not answer — it
+is almost never a wrong password. Check in this order:
 
-```bash
-# From repo root
-docker compose -f infra/docker-compose.yml up -d
-cd nexus-backend && poetry install && poetry run uvicorn app.main:app --reload
-cd frontend && npm install && npm run dev
-```
+1. Is the backend running? `curl http://localhost:8000/health`
+   should return `{"status":"ok",...}`. If it does not, start it:
+   `./scripts/start-nexus.sh --docker`.
+2. Is Postgres up? The backend now retries table creation for
+   60s while Postgres starts, instead of crashing — but if Postgres
+   never comes up, the API never listens. Check
+   `docker compose -f infra/docker-compose.yml ps`.
+3. Are you opening the right URL? Open the **5173** console URL
+   (in Codespaces, the forwarded 5173 port). Do not open a
+   `-8000` URL directly, and do not expect `localhost:8000` to
+   work from your phone — `localhost` there means the phone.
+4. The login page now shows the backend status and the exact
+   backend address it tried, with a Retry button — use that
+   instead of guessing.
+
+There is no public hosted Nexus site yet: the app runs from your
+Codespace / machine with the steps above.
 
 ## MVP Scope
 
