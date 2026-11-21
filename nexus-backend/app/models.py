@@ -118,6 +118,7 @@ class ComplianceResult(Base):
     findings = Column(JSON, default=list)
     assessed_at = Column(DateTime, default=datetime.utcnow)
 
+class AuditEvent(Base):
     __tablename__ = "audit_events"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
