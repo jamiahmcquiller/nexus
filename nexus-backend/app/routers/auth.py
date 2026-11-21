@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from ..database import get_db
 from ..models import User, Tenant
 from ..auth import verify_password, create_access_token, get_password_hash, get_current_user
@@ -16,12 +16,15 @@ class LoginRequest(BaseModel):
     password: str
 
 class RegisterRequest(BaseModel):
-    tenant_name: str
-    username: str
-    password: str
+    tenant_name: str = Field(min_length=1, max_length=120)
+    username: str = Field(min_length=2, max_length=64, pattern=r"^\S+$")
+    password: str = Field(min_length=8, max_length=128)
 
 @router.post("/register", response_model=Token)
 def register(req: RegisterRequest, db: Session = Depends(get_db)):
+    # Usernames are global for now because login looks users up by username alone.
+    if db.query(User).filter(User.username == req.username).first():
+        raise HTTPException(status_code=409, detail="That username is already taken")
     # Create tenant + owner user
     tenant = Tenant(name=req.tenant_name)
     db.add(tenant)

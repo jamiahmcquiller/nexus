@@ -60,6 +60,30 @@ See `docs/PRD.md` (or the uploaded Product Requirements Document). First release
 - Heartbeat / check-in
 - Groups and audit logging
 
+## Sample data
+
+To fill an organization with sample devices, vulnerabilities, patches, tickets, workflows, warranty, and compliance data:
+
+```bash
+cd nexus-backend
+poetry run python -m app.scripts.seed_demo <your-username>          # add (safe to rerun)
+poetry run python -m app.scripts.seed_demo <your-username> --remove # remove sample devices
+```
+
+## Console modules
+
+| Module | What works today |
+|---|---|
+| Overview | Live device health, attention list, activity, ticket and warranty counts |
+| Endpoint Management | Inventory, search/filter/export, device profiles, groups, enrollment codes, warranty tracker with CSV import |
+| Vulnerability Management | Findings with CVSS, exploit likelihood, exploited-in-the-wild flag, priority score; mark fixed / accept risk |
+| Patch Management | Catalog, approval queue, deployments (install is simulated until the agent can patch), policies |
+| Software Management | Fleet-wide software inventory, approve / mark unapproved |
+| Service Desk | Incidents, requests, changes with SLAs, approvals, comments, employee portal |
+| Automation | Trigger and action workflows that run on schedule or on demand |
+| Security & Compliance | CIS v8 / NIST CSF controls (auto-checked and manual), risk register, audit log |
+| Reports | Inventory, exposure, patching, service desk, and warranty analytics; print to PDF |
+
 ## Status
 
 - [x] Repository and foundational documentation
