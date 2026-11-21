@@ -6,36 +6,57 @@ export default {
   ],
   // Class-based dark mode: the console toggles `dark` on <html>
   // (see App.tsx) and the CSS variables in index.css follow it,
-  // so light and dark stay on the same NEXUS palette.
+  // so light and dark stay on the same NULL palette.
   darkMode: 'class',
   theme: {
     extend: {
       colors: {
-        // NEXUS brand palette — single source of truth is theme.ts;
-        // these Tailwind names mirror it exactly.
-        nexus: {
-          navy: '#142B4A',
-          navyLight: '#1D3A5F',
-          navyMuted: '#8AA0B8',
-          navyDeep: '#0E1F36',
-          teal: '#167C80',
-          tealDark: '#0F5E62',
-          tealSoft: '#E6F2F3',
-          cloud: '#F5F7FA',
-          cloudDeep: '#F1F5F9',
-          slate: '#667085',
-          slateDark: '#344054',
-          border: '#E5EAF0',
+        // NULL brand palette — single source of truth is theme.ts;
+        // these Tailwind names mirror it exactly. `nexus` is a
+        // deprecated alias, removed when the shell migration moves
+        // App.tsx off the nexus-* classes.
+        null: {
+          obsidian: '#071525',
+          navy2: '#102b45',
+          deepSlate: '#172A43',
+          teal: '#17C3B2',
+          tealSecondary: '#20B7AA',
+          tealDark: '#0FA79B',
+          tealSoft: '#E6F7F5',
+          ink: '#14243a',
+          muted: '#65748a',
+          line: '#e1e7ee',
+          cloud: '#f4f7fa',
+          cloudDeep: '#EDF1F5',
+          white: '#FFFFFF',
           success: '#218568',
           warning: '#D99536',
           critical: '#C64D4D',
           info: '#3D6C9A',
-          pending: '#7959C7',
+        },
+        nexus: {
+          navy: '#14243a',
+          navyLight: '#102b45',
+          navyMuted: '#8AA0B8',
+          navyDeep: '#071525',
+          teal: '#17C3B2',
+          tealDark: '#0FA79B',
+          tealSoft: '#E6F7F5',
+          cloud: '#f4f7fa',
+          cloudDeep: '#EDF1F5',
+          slate: '#65748a',
+          slateDark: '#14243a',
+          border: '#e1e7ee',
+          success: '#218568',
+          warning: '#D99536',
+          critical: '#C64D4D',
+          info: '#3D6C9A',
+          pending: '#3D6C9A',
         },
       },
       fontFamily: {
         sans: ['Inter', 'system-ui', '-apple-system', 'Segoe UI', 'sans-serif'],
-        display: ['Manrope', 'Inter', 'system-ui', 'sans-serif'],
+        display: ['Inter', 'system-ui', 'sans-serif'],
       },
     },
   },

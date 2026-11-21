@@ -1,37 +1,57 @@
-// NEXUS Service — centralized brand tokens.
+// NULL — centralized brand tokens.
 // Single source of truth for the brand color system. Every screen
-// reads these values (via Tailwind `nexus-*` colors or the CSS
+// reads these values (via Tailwind `null-*` colors or the CSS
 // variables in index.css) — no hardcoded blue/gray theme colors
 // anywhere else in the console.
 //
-// NOTE on Cloud Gray: the brief lists it twice, as #F1F5F9 in the
-// headline palette and #F5F7FA in the §1 implementation table.
-// This file uses #F5F7FA (the §1 table value) for the main app
-// background; #F1F5F9 is kept as `cloudDeep` for hover wells.
+// The palette is site-literal from the NULL enterprise website
+// (repo jamiahmcquiller/Null): Obsidian / navy2 / Teal / ink /
+// muted / line / cloud. Light theme is the default; dark theme is
+// deliberately designed in index.css (Obsidian app background,
+// navy2 / Deep Slate surfaces), not an inversion.
 
-export const NEXUS_COLORS = {
-  navy: '#142B4A', // Midnight Navy — sidebar, navigation, branding
-  navyLight: '#1D3A5F', // hovered / selected nav item
-  navyMuted: '#8AA0B8', // muted blue-gray nav labels on navy
-  navyDeep: '#0E1F36', // darkest navy (login backdrop, dark-mode sidebar)
-  teal: '#167C80', // Nexus Teal — primary buttons, active states, links
-  tealDark: '#0F5E62', // teal hover / pressed
-  tealSoft: '#E6F2F3', // teal tint for active pills and selected rows
-  cloud: '#F5F7FA', // Cloud Gray — main application background
-  cloudDeep: '#F1F5F9', // deeper cloud gray for hover wells
+export const NULL_COLORS = {
+  // Canonical NULL palette (site-literal).
+  obsidian: '#071525', // Obsidian — dark app background, sidebar, login backdrop
+  navy2: '#102b45', // navy2 — elevated dark surfaces
+  deepSlate: '#172A43', // Deep Slate — higher-elevation dark surfaces
+  teal: '#17C3B2', // NULL Teal — identifying accent, used sparingly
+  tealSecondary: '#20B7AA', // Teal Secondary
+  ink: '#14243a', // primary text on light surfaces
+  muted: '#65748a', // secondary text on light surfaces
+  line: '#e1e7ee', // borders / dividers on light surfaces
+  cloud: '#f4f7fa', // Cloud Gray — light app background
   white: '#FFFFFF', // cards, tables, modals, content surfaces
-  slate: '#667085', // secondary text, descriptions, icons
-  slateDark: '#344054', // body text
-  border: '#E5EAF0', // dividers, borders, table outlines
+  // Compatibility keys — same values, old NEXUS names, so existing
+  // screens (e.g. GrcWorkspace) keep working during the migration.
+  // New code should use the canonical keys above.
+  navy: '#14243a', // = ink
+  navyLight: '#102b45', // = navy2 (hovered / selected nav item on dark)
+  navyMuted: '#8AA0B8', // muted blue-gray labels on dark surfaces
+  navyDeep: '#071525', // = obsidian
+  slate: '#65748a', // = muted
+  slateDark: '#14243a', // = ink
+  border: '#e1e7ee', // = line
+  tealDark: '#0FA79B', // teal hover / pressed
+  tealSoft: '#E6F7F5', // teal tint for active pills and selected rows
+  cloudDeep: '#EDF1F5', // deeper cloud gray for hover wells
   // Semantic status colors — meaning is fixed, never decorative.
+  // The purple "pending" tone is gone: waiting / in-progress states
+  // now read as info blue (#3D6C9A on #EAF1F7).
   success: '#218568',
   warning: '#D99536',
   critical: '#C64D4D',
   info: '#3D6C9A',
-  pending: '#7959C7',
 } as const
 
-export type StatusTone = 'success' | 'warning' | 'critical' | 'info' | 'pending' | 'neutral'
+/**
+ * @deprecated Use NULL_COLORS. Kept as an alias so screens that
+ * still import NEXUS_COLORS keep working mid-transition; the shell
+ * migration removes it once App.tsx and GrcWorkspace move over.
+ */
+export const NEXUS_COLORS = NULL_COLORS
+
+export type StatusTone = 'success' | 'warning' | 'critical' | 'info' | 'neutral'
 
 const STATUS_TONE_BY_VALUE: Record<string, StatusTone> = {
   // severity / priority
@@ -63,13 +83,13 @@ const STATUS_TONE_BY_VALUE: Record<string, StatusTone> = {
   failed: 'critical',
   expired: 'critical',
   non_compliant: 'critical',
-  // in progress / waiting
-  testing: 'pending',
-  scheduled: 'pending',
-  pending: 'pending',
-  investigating: 'pending',
-  mitigated: 'pending',
-  draft: 'pending',
+  // in progress / waiting — read as info blue, not purple
+  testing: 'info',
+  scheduled: 'info',
+  pending: 'info',
+  investigating: 'info',
+  mitigated: 'info',
+  draft: 'info',
   disabled: 'neutral',
   declined: 'neutral',
   ended: 'neutral',
@@ -83,12 +103,11 @@ export function statusTone(value: string | undefined | null): StatusTone {
 }
 
 const TONE_HEX: Record<StatusTone, string> = {
-  success: NEXUS_COLORS.success,
-  warning: NEXUS_COLORS.warning,
-  critical: NEXUS_COLORS.critical,
-  info: NEXUS_COLORS.info,
-  pending: NEXUS_COLORS.pending,
-  neutral: NEXUS_COLORS.slate,
+  success: NULL_COLORS.success,
+  warning: NULL_COLORS.warning,
+  critical: NULL_COLORS.critical,
+  info: NULL_COLORS.info,
+  neutral: NULL_COLORS.muted,
 }
 
 const TONE_SOFT_BG: Record<StatusTone, string> = {
@@ -96,11 +115,10 @@ const TONE_SOFT_BG: Record<StatusTone, string> = {
   warning: '#FBF3E4',
   critical: '#FBECEC',
   info: '#EAF1F7',
-  pending: '#F0EBFB',
   neutral: '#EEF1F5',
 }
 
-/** Badge classes for a status/severity value, using the semantic palette. */
+/** Badge colors for a status/severity value, using the semantic palette. */
 export function statusBadgeClasses(value: string | undefined | null): { color: string; background: string } {
   const tone = statusTone(value)
   return { color: TONE_HEX[tone], background: TONE_SOFT_BG[tone] }
@@ -109,6 +127,7 @@ export function statusBadgeClasses(value: string | undefined | null): { color: s
 export type ThemeMode = 'light' | 'dark'
 export type Density = 'compact' | 'comfortable' | 'spacious'
 
-export const THEME_STORAGE_KEY = 'nexus_theme'
-export const DENSITY_STORAGE_KEY = 'nexus_density'
-export const WORKSPACE_STORAGE_KEY = 'nexus_workspace'
+export const THEME_STORAGE_KEY = 'null_theme'
+export const DENSITY_STORAGE_KEY = 'null_density'
+export const WORKSPACE_STORAGE_KEY = 'null_workspace'
+export const TOKEN_STORAGE_KEY = 'null_token'

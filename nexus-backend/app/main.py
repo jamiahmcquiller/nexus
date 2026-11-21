@@ -27,7 +27,7 @@ from .routers import (
     auth, devices, patches, vulnerabilities, alerts, policies, compliance,
     patching, vulnops, edr, malware, browser, appcontrol, dlp, access,
     assets, distribution, dex, remote, imaging, configmgmt, mdm,
-    encryption, servers, reporting, scheduler, grc, agent,
+    encryption, servers, reporting, scheduler, grc, agent, demo,
 )
 
 # Create tables
@@ -78,6 +78,7 @@ app.include_router(reporting.router)
 app.include_router(scheduler.router)
 app.include_router(grc.router)
 app.include_router(agent.router)
+app.include_router(demo.router)
 
 @app.get("/")
 async def root():

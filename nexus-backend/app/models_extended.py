@@ -50,6 +50,7 @@ class PatchDeployment(Base):
     pre_checks = Column(JSON, default=list)
     post_checks = Column(JSON, default=list)
     test_result = Column(String)  # pass, fail, pending
+    is_demo = Column(Boolean, default=False)
     attributes = _attrs()
     created_at = _created()
 
@@ -185,6 +186,7 @@ class IncidentResponse(Base):
     action = Column(String)  # isolate, kill-process, quarantine, rollback
     status = Column(String, default="pending")  # pending, in-progress, complete, failed
     performed_by = Column(String)
+    is_demo = Column(Boolean, default=False)
     attributes = _attrs()
     created_at = _created()
 
@@ -202,6 +204,7 @@ class MalwareDetection(Base):
     severity = Column(String)
     quarantined = Column(Boolean, default=False)
     status = Column(String, default="detected")  # detected, quarantined, remediated, false-positive
+    is_demo = Column(Boolean, default=False)
     attributes = _attrs()
     created_at = _created()
 
@@ -306,6 +309,7 @@ class SensitiveDataFinding(Base):
     data_type = Column(String)  # pii, pci, phi, credentials, custom
     classification = Column(String)
     status = Column(String, default="open")  # open, encrypted, remediated, accepted
+    is_demo = Column(Boolean, default=False)
     attributes = _attrs()
     created_at = _created()
 
@@ -849,6 +853,7 @@ class Server(Base):
     role = Column(String)
     health_status = Column(String, default="healthy")  # healthy, degraded, down
     status = Column(String, default="active")
+    is_demo = Column(Boolean, default=False)
     attributes = _attrs()
     created_at = _created()
 

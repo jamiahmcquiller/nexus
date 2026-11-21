@@ -1,4 +1,4 @@
-// NEXUS Service — administrator workspaces.
+// NULL — administrator workspaces.
 //
 // Two workspaces, one sign-in. The JWT from a single login authorizes
 // both; switching only changes which navigation and home dashboard

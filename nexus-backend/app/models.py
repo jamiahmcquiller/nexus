@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, DateTime, ForeignKey, JSON, Text, Index
+from sqlalchemy import Column, String, DateTime, ForeignKey, JSON, Text, Index, Boolean
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from .database import Base
@@ -33,6 +33,7 @@ class Device(Base):
     # SHA-256 of the per-device credential issued at enrollment. The
     # plaintext token is shown to the agent once and never stored.
     device_token_hash = Column(String, nullable=True)
+    is_demo = Column(Boolean, default=False)
     attributes = Column(JSON, default=dict)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -72,6 +73,7 @@ class Patch(Base):
     severity = Column(String)  # critical, important, moderate, low
     status = Column(String, default="available")  # available, testing, approved, declined, deployed
     product = Column(String)
+    is_demo = Column(Boolean, default=False)
     attributes = Column(JSON, default=dict)
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -85,6 +87,7 @@ class Vulnerability(Base):
     cvss_score = Column(String)
     status = Column(String, default="open")  # open, mitigated, remediated, accepted
     device_id = Column(UUID(as_uuid=True), ForeignKey("devices.id"))
+    is_demo = Column(Boolean, default=False)
     attributes = Column(JSON, default=dict)
     detected_at = Column(DateTime, default=datetime.utcnow)
 
@@ -108,6 +111,7 @@ class Policy(Base):
     policy_type = Column(String, nullable=False)  # patch, compliance, app_control, encryption, browser, mdm
     status = Column(String, default="draft")
     definition = Column(JSON, default=dict)
+    is_demo = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class ComplianceResult(Base):

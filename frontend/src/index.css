@@ -1,52 +1,74 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Manrope:wght@600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 /*
- * NEXUS Service — centralized design tokens.
- * Light mode is the primary palette (Midnight Navy / Teal /
- * Cloud Gray / White). Dark mode adjusts the same palette:
- * navy/charcoal surfaces, teal accents kept, status colors kept
- * so their meaning never changes. Density is a data attribute
- * on the app root: compact / comfortable / spacious.
+ * NULL — centralized design tokens.
+ * Light mode is the primary palette (Obsidian / Teal / Cloud Gray /
+ * White), site-literal from the NULL enterprise website. Dark mode
+ * is deliberately designed, not an inversion: Obsidian app
+ * background, navy2 / Deep Slate surfaces, white primary text,
+ * #8AA0B8 secondary text, hairline white borders, teal accents
+ * kept, status colors kept so their meaning never changes.
+ * Density is a data attribute on the app root:
+ * compact / comfortable / spacious.
  */
 :root {
-  --nexus-navy: #142B4A;
-  --nexus-navy-light: #1D3A5F;
-  --nexus-teal: #167C80;
-  --nexus-teal-dark: #0F5E62;
-  --nexus-cloud: #F5F7FA;
+  --null-obsidian: #071525;
+  --null-navy2: #102b45;
+  --null-deep-slate: #172A43;
+  --null-teal: #17C3B2;
+  --null-teal-secondary: #20B7AA;
+  --null-teal-dark: #0FA79B;
+  --null-teal-soft: #E6F7F5;
+  --null-ink: #14243a;
+  --null-muted: #65748a;
+  --null-line: #e1e7ee;
+  --null-cloud: #f4f7fa;
+  --null-white: #FFFFFF;
+  --null-success: #218568;
+  --null-warning: #D99536;
+  --null-critical: #C64D4D;
+  --null-info: #3D6C9A;
+  /* Deprecated aliases — same values under the old nexus-* names. */
+  --nexus-navy: #14243a;
+  --nexus-navy-light: #102b45;
+  --nexus-teal: #17C3B2;
+  --nexus-teal-dark: #0FA79B;
+  --nexus-cloud: #f4f7fa;
   --nexus-white: #FFFFFF;
-  --nexus-slate: #667085;
-  --nexus-slate-dark: #344054;
-  --nexus-border: #E5EAF0;
+  --nexus-slate: #65748a;
+  --nexus-slate-dark: #14243a;
+  --nexus-border: #e1e7ee;
   --nexus-success: #218568;
   --nexus-warning: #D99536;
   --nexus-critical: #C64D4D;
   --nexus-info: #3D6C9A;
-  --nexus-pending: #7959C7;
+  --nexus-pending: #3D6C9A;
 
   --surface: #FFFFFF;
-  --surface-muted: #F5F7FA;
-  --app-bg: #F5F7FA;
-  --text: #344054;
-  --text-muted: #667085;
+  --surface-muted: #f4f7fa;
+  --app-bg: #f4f7fa;
+  --text: #14243a;
+  --text-muted: #65748a;
   --input-bg: #FFFFFF;
-  --row-hover: #F1F5F9;
-  --card-shadow: 0 1px 2px rgba(20, 43, 74, 0.06);
+  --row-hover: #EDF1F5;
+  --border-color: #e1e7ee;
+  --card-shadow: 0 1px 2px rgba(7, 21, 37, 0.06);
   --pad-card: 1.5rem;
   --pad-row: 0.5rem;
 }
 
 .dark {
-  --surface: #16283F;
-  --surface-muted: #1D3A5F;
-  --app-bg: #0E1F36;
-  --text: #E6EBF2;
+  --surface: #102b45;
+  --surface-muted: #172A43;
+  --app-bg: #071525;
+  --text: #FFFFFF;
   --text-muted: #8AA0B8;
-  --input-bg: #16283F;
-  --row-hover: #1D3A5F;
+  --input-bg: #102b45;
+  --row-hover: #172A43;
+  --border-color: rgba(255, 255, 255, 0.08);
   --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
 
@@ -60,32 +82,34 @@ body {
   color: var(--text);
 }
 
-h1, h2, h3 { font-family: Manrope, Inter, system-ui, sans-serif; }
+/* Inter only — headings get tight tracking, weights 600-800. */
+h1, h2, h3 { font-family: Inter, system-ui, sans-serif; letter-spacing: -0.02em; }
 
 /* Visible keyboard focus everywhere — part of the brand QA bar. */
 :focus-visible {
-  outline: 2px solid var(--nexus-teal);
+  outline: 2px solid var(--null-teal);
   outline-offset: 2px;
 }
 
 /* Shared surfaces: cards, inputs, and tables read the tokens above,
-   so a theme or density change applies to every screen at once. */
-.nexus-card {
+   so a theme or density change applies to every screen at once.
+   .null-* is canonical; .nexus-* is a deprecated alias kept until
+   the shell migration renames the class usages in App.tsx. */
+.null-card, .nexus-card {
   background: var(--surface);
-  border: 1px solid var(--nexus-border);
+  border: 1px solid var(--border-color);
   border-radius: 0.5rem;
   box-shadow: var(--card-shadow);
   padding: var(--pad-card);
 }
-.dark .nexus-card { border-color: #243A56; }
 
-.nexus-input {
+.null-input, .nexus-input {
   background: var(--input-bg);
-  border: 1px solid var(--nexus-border);
+  border: 1px solid var(--border-color);
   border-radius: 0.375rem;
   color: var(--text);
   width: 100%;
 }
-.nexus-input::placeholder { color: var(--text-muted); }
+.null-input::placeholder, .nexus-input::placeholder { color: var(--text-muted); }
 
-.nexus-table-row:hover { background: var(--row-hover); }
+.null-table-row:hover, .nexus-table-row:hover { background: var(--row-hover); }

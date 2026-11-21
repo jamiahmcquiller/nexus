@@ -23,6 +23,8 @@ class DeviceOut(BaseModel):
     enrollment_status: str
     agent_version: Optional[str]
     last_checkin_at: Optional[datetime]
+    is_demo: bool = False
+    created_at: Optional[datetime] = None
     attributes: dict
 
     class Config:

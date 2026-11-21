@@ -1,10 +1,15 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import axios from 'axios'
-import { statusBadgeClasses, statusTone, DENSITY_STORAGE_KEY, THEME_STORAGE_KEY, WORKSPACE_STORAGE_KEY } from './theme'
+import { statusBadgeClasses, statusTone, DENSITY_STORAGE_KEY, THEME_STORAGE_KEY, WORKSPACE_STORAGE_KEY, TOKEN_STORAGE_KEY } from './theme'
 import GrcWorkspace from './GrcWorkspace'
 import type { Density, ThemeMode } from './theme'
-import { WORKSPACES, getWorkspace, pickStatValue } from './workspaces'
+import { WORKSPACES, getWorkspace } from './workspaces'
 import type { WorkspaceDef, WorkspaceId } from './workspaces'
+import { Breadcrumbs, Icon, ToastProvider, useToast } from './components'
+import type { IconName } from './components'
+import { ItOpsHome } from './homes/ItOpsHome'
+import SecOpsHome from './homes/SecOpsHome'
+import { NULL_LOGO_SRC } from './logoDataUri'
 
 const API = (() => {
   if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL
@@ -30,7 +35,7 @@ const API = (() => {
 const BACKEND_LABEL = API || (typeof window !== 'undefined' ? window.location.origin : '')
 
 if (typeof window !== 'undefined') {
-  console.log('[NEXUS] API base URL:', API)
+  console.log('[NULL] API base URL:', API)
 }
 
 type Subsection = { id: string; label: string; endpoint: string }
@@ -264,6 +269,53 @@ const MODULES: ModuleDef[] = [
   { id: 'policies', label: 'Policies', description: 'Cross-module policy definitions (patch, compliance, app control, encryption, browser, MDM).', endpoint: '/api/v1/policies/', workspace: 'security' },
 ]
 
+// Sidebar navigation groups (brief §6). Each group lists module ids
+// in display order; groups with no visible modules are not rendered.
+const NAV_GROUPS: Record<WorkspaceId, { label: string; modules: string[] }[]> = {
+  operations: [
+    { label: 'Overview', modules: ['home'] },
+    { label: 'Endpoint Management', modules: ['devices', 'mdm', 'encryption'] },
+    { label: 'Software & Deployment', modules: ['patches', 'distribution', 'imaging'] },
+    { label: 'Infrastructure', modules: ['servers', 'assets', 'config'] },
+    { label: 'Employee Experience', modules: ['dex', 'remote'] },
+    { label: 'Administration', modules: ['scheduler'] },
+  ],
+  security: [
+    { label: 'Overview', modules: ['home'] },
+    { label: 'Threat & Exposure', modules: ['vulnerabilities', 'edr', 'malware', 'ransomware'] },
+    { label: 'Data & Access Security', modules: ['browser', 'appcontrol', 'dlp', 'access'] },
+    { label: 'Governance', modules: ['compliance', 'policies'] },
+  ],
+}
+
+const MODULE_ICONS: Record<string, IconName> = {
+  home: 'home',
+  devices: 'server',
+  patches: 'download',
+  vulnerabilities: 'alert-triangle',
+  edr: 'search',
+  malware: 'x-circle',
+  ransomware: 'shield',
+  browser: 'file-text',
+  appcontrol: 'settings',
+  dlp: 'file-text',
+  access: 'users',
+  assets: 'file-text',
+  distribution: 'download',
+  dex: 'check-circle',
+  remote: 'users',
+  imaging: 'server',
+  config: 'settings',
+  mdm: 'server',
+  encryption: 'shield',
+  servers: 'server',
+  scheduler: 'clock',
+  compliance: 'file-text',
+  policies: 'file-text',
+}
+
+const SIDEBAR_COLLAPSED_KEY = 'null_sidebar_collapsed'
+
 const STATUS_OPTIONS = ['active', 'open', 'new', 'available', 'scheduled', 'testing', 'approved', 'declined', 'deployed', 'mitigated', 'remediated', 'contained', 'resolved', 'quarantined', 'recovered', 'locked', 'wiped', 'ended', 'draft', 'disabled', 'complete', 'running']
 
 const SEVERITY_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 }
@@ -292,8 +344,15 @@ function storedWorkspace(): WorkspaceId {
   return value === 'security' ? 'security' : 'operations'
 }
 
-function App() {
-  const [token, setToken] = useState(localStorage.getItem('nexus_token') || '')
+function storedSidebarCollapsed(): boolean {
+  return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1'
+}
+
+const DENSITY_ORDER: Density[] = ['compact', 'comfortable', 'spacious']
+
+function Console() {
+  const toast = useToast()
+  const [token, setToken] = useState(localStorage.getItem(TOKEN_STORAGE_KEY) || '')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -306,15 +365,21 @@ function App() {
   const [subsection, setSubsection] = useState('')
   const [stats, setStats] = useState<Record<string, any>>({})
   const [items, setItems] = useState<any[]>([])
-  const [homeStats, setHomeStats] = useState<Record<string, number>>({})
   const [attentionItems, setAttentionItems] = useState<any[]>([])
   const [newName, setNewName] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
-  const [notice, setNotice] = useState('')
   const [navQuery, setNavQuery] = useState('')
   const [theme, setTheme] = useState<ThemeMode>(storedTheme)
   const [density, setDensity] = useState<Density>(storedDensity)
   const [backendStatus, setBackendStatus] = useState<'checking' | 'ok' | 'unreachable'>('checking')
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(storedSidebarCollapsed)
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({})
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  const [paletteQuery, setPaletteQuery] = useState('')
+  const [paletteIndex, setPaletteIndex] = useState(0)
+  const [bellOpen, setBellOpen] = useState(false)
+  const [userMenuOpen, setUserMenuOpen] = useState(false)
+  const paletteInputRef = useRef<HTMLInputElement>(null)
 
   const workspaceDef: WorkspaceDef = getWorkspace(workspace)
   // Role gates for the write controls. The backend enforces the same
@@ -336,6 +401,10 @@ function App() {
   useEffect(() => {
     localStorage.setItem(DENSITY_STORAGE_KEY, density)
   }, [density])
+
+  useEffect(() => {
+    localStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed ? '1' : '0')
+  }, [sidebarCollapsed])
 
   // On load, check whether the backend is actually reachable, so the
   // login page can say so plainly instead of failing with a bare
@@ -381,7 +450,7 @@ function App() {
       } catch {
         // Token no longer valid — sign out rather than guessing.
         setToken('')
-        localStorage.removeItem('nexus_token')
+        localStorage.removeItem(TOKEN_STORAGE_KEY)
         setSessionUser(null)
       }
     }
@@ -411,16 +480,6 @@ function App() {
   const loadHome = useCallback(async () => {
     if (!token) return
     const def = getWorkspace(workspace)
-    const values: Record<string, number> = {}
-    await Promise.all(def.homeStats.map(async (stat) => {
-      try {
-        const res = await axios.get(`${API}${stat.endpoint}`, { headers })
-        values[stat.label] = pickStatValue(res.data || {}, stat.preferKeys)
-      } catch {
-        values[stat.label] = 0
-      }
-    }))
-    setHomeStats(values)
     try {
       const res = await axios.get(`${API}${def.attentionEndpoint}`, { headers })
       const list = (Array.isArray(res.data) ? res.data : [])
@@ -441,7 +500,12 @@ function App() {
       return
     }
     // GRC has its own data fetching inside GrcWorkspace.
-    if (module === 'compliance') return
+    if (module === 'compliance') {
+      // Still refresh the attention feed so the header bell stays
+      // live on pages that don't load home data themselves.
+      loadHome()
+      return
+    }
     try {
       const d = await axios.get(`${API}${endpoint}`, { headers })
       setItems(Array.isArray(d.data) ? d.data : [])
@@ -454,17 +518,21 @@ function App() {
     } catch {
       setStats({})
     }
+    // Keep the notification bell populated on module pages too.
+    loadHome()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, endpoint, module, loadHome])
 
   useEffect(() => { load() }, [load])
 
-  const pickModule = (id: string) => {
+  const pickModule = (id: string, subId?: string) => {
     setModule(id)
-    setSubsection('')
-    setNotice('')
+    setSubsection(subId || '')
     setEditingId(null)
     setNewName('')
+    setPaletteOpen(false)
+    setBellOpen(false)
+    setUserMenuOpen(false)
   }
 
   // Switch workspaces on the same sign-in: the token is untouched,
@@ -477,15 +545,25 @@ function App() {
     localStorage.setItem(WORKSPACE_STORAGE_KEY, id)
     setModule('home')
     setSubsection('')
-    setNotice('')
     setNavQuery('')
+    setPaletteOpen(false)
+    setBellOpen(false)
+    setUserMenuOpen(false)
+  }
+
+  const toggleTheme = () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))
+
+  const cycleDensity = () => {
+    const next = DENSITY_ORDER[(DENSITY_ORDER.indexOf(density) + 1) % DENSITY_ORDER.length]
+    setDensity(next)
+    toast.info(`Density: ${next}`)
   }
 
   const login = async () => {
     try {
       const res = await axios.post(`${API}/api/v1/auth/token`, { username, password })
       setToken(res.data.access_token)
-      localStorage.setItem('nexus_token', res.data.access_token)
+      localStorage.setItem(TOKEN_STORAGE_KEY, res.data.access_token)
       setError('')
     } catch (err: any) {
       if (!err.response) setBackendStatus('unreachable')
@@ -501,7 +579,7 @@ function App() {
         password,
       })
       setToken(res.data.access_token)
-      localStorage.setItem('nexus_token', res.data.access_token)
+      localStorage.setItem(TOKEN_STORAGE_KEY, res.data.access_token)
       setError('')
     } catch (err: any) {
       if (!err.response) setBackendStatus('unreachable')
@@ -511,9 +589,12 @@ function App() {
 
   const signOut = () => {
     setToken('')
-    localStorage.removeItem('nexus_token')
+    localStorage.removeItem(TOKEN_STORAGE_KEY)
     setSessionUser(null)
     setModule('home')
+    setPaletteOpen(false)
+    setBellOpen(false)
+    setUserMenuOpen(false)
   }
 
   const createItem = async () => {
@@ -523,15 +604,15 @@ function App() {
         // Edit: the Add box doubles as the edit box while editing.
         await axios.patch(`${API}${endpoint}${editingId}`, { title: newName, name: newName }, { headers })
         setEditingId(null)
-        setNotice('Updated.')
+        toast.success('Updated.')
       } else {
         await axios.post(`${API}${endpoint}`, { title: newName, name: newName }, { headers })
-        setNotice('Created.')
+        toast.success('Created.')
       }
       setNewName('')
       load()
     } catch (err: any) {
-      setNotice(err.response?.data?.detail || 'Save failed')
+      toast.error(err.response?.data?.detail || 'Save failed')
     }
   }
 
@@ -549,30 +630,30 @@ function App() {
     if (!window.confirm(`Delete ${displayName(item)}? This cannot be undone.`)) return
     try {
       await axios.delete(`${API}${endpoint}${item.id}`, { headers })
-      setNotice('Deleted.')
+      toast.success('Deleted.')
       load()
     } catch (err: any) {
-      setNotice(err.response?.data?.detail || 'Delete failed')
+      toast.error(err.response?.data?.detail || 'Delete failed')
     }
   }
 
   const runSchedulerNow = async () => {
     try {
       const res = await axios.post(`${API}/api/v1/scheduler/run-once`, {}, { headers })
-      setNotice(`Scheduler tick done: ${(res.data.actions || []).length} action(s).`)
+      toast.success(`Scheduler tick done: ${(res.data.actions || []).length} action(s).`)
       load()
     } catch (err: any) {
-      setNotice(err.response?.data?.detail || 'Scheduler run failed — owner/admin only, and the API must be running.')
+      toast.error(err.response?.data?.detail || 'Scheduler run failed — owner/admin only, and the API must be running.')
     }
   }
 
   const setStatus = async (item: any, status: string) => {
     try {
       await axios.post(`${API}${endpoint}${item.id}/status`, { status }, { headers })
-      setNotice(`Status set to ${status}.`)
+      toast.success(`Status set to ${status}.`)
       load()
     } catch (err: any) {
-      setNotice(err.response?.data?.detail || 'Status update failed')
+      toast.error(err.response?.data?.detail || 'Status update failed')
     }
   }
 
@@ -599,10 +680,10 @@ function App() {
     if (!url) return
     try {
       await axios.post(`${API}${url}`, action === 'edr-contain' ? { action: 'isolate' } : {}, { headers })
-      setNotice('Action completed.')
+      toast.success('Action completed.')
       load()
     } catch (err: any) {
-      setNotice(err.response?.data?.detail || 'Action failed')
+      toast.error(err.response?.data?.detail || 'Action failed')
     }
   }
 
@@ -627,13 +708,122 @@ function App() {
     return []
   }
 
+  /* ------------------------- command palette ------------------------- */
+
+  type PaletteEntry = { id: string; label: string; detail: string; run: () => void }
+  const paletteEntries: PaletteEntry[] = [
+    ...workspaceModules.map((m) => ({
+      id: `module-${m.id}`,
+      label: m.label,
+      detail: `${workspaceDef.label} · section`,
+      run: () => pickModule(m.id),
+    })),
+    { id: 'home', label: workspaceDef.homeTitle, detail: `${workspaceDef.label} · home`, run: () => pickModule('home') },
+    ...WORKSPACES.filter((w) => w.id !== workspace && authorizedWorkspaces.includes(w.id)).map((w) => ({
+      id: `ws-${w.id}`,
+      label: `Switch to ${w.label}`,
+      detail: 'Workspace · same sign-in',
+      run: () => switchWorkspace(w.id),
+    })),
+    { id: 'theme', label: `Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`, detail: 'Appearance', run: toggleTheme },
+    { id: 'density', label: `Cycle density (now ${density})`, detail: 'Appearance', run: cycleDensity },
+    { id: 'signout', label: 'Sign out', detail: 'Session', run: signOut },
+  ]
+  const paletteFiltered = paletteQuery.trim()
+    ? paletteEntries.filter((e) => `${e.label} ${e.detail}`.toLowerCase().includes(paletteQuery.trim().toLowerCase()))
+    : paletteEntries
+
+  useEffect(() => {
+    if (paletteOpen) {
+      setPaletteQuery('')
+      setPaletteIndex(0)
+      paletteInputRef.current?.focus()
+    }
+  }, [paletteOpen])
+
+  // Ctrl+K / Cmd+K opens the palette from anywhere; ESC closes it.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setPaletteOpen((v) => !v)
+      } else if (e.key === 'Escape') {
+        setPaletteOpen(false)
+        setBellOpen(false)
+        setUserMenuOpen(false)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  const onPaletteKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setPaletteIndex((i) => Math.min(i + 1, paletteFiltered.length - 1))
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setPaletteIndex((i) => Math.max(i - 1, 0))
+    } else if (e.key === 'Enter') {
+      e.preventDefault()
+      paletteFiltered[paletteIndex]?.run()
+    }
+  }
+
+  /* --------------------------- breadcrumbs --------------------------- */
+
+  const activeSubsection = current?.subsections
+    ? (current.subsections.find((s) => s.id === subsection) || current.subsections[0])
+    : undefined
+  const breadcrumbItems = [
+    { label: 'NULL', onClick: () => pickModule('home') },
+    { label: workspaceDef.label, onClick: () => pickModule('home') },
+    ...(module === 'home'
+      ? [{ label: workspaceDef.homeTitle }]
+      : current
+        ? [{ label: current.label, onClick: activeSubsection ? () => pickModule(current.id) : undefined }, ...(activeSubsection ? [{ label: activeSubsection.label }] : [])]
+        : []),
+  ]
+
+  // The attention feed belongs to the current workspace's home
+  // dashboard (patches for IT Ops, vulnerabilities for SecOps);
+  // the bell navigates to that module.
+  const attentionModuleId = workspace === 'operations' ? 'patches' : 'vulnerabilities'
+
+  const toggleGroup = (label: string) => {
+    setOpenGroups((prev) => ({ ...prev, [label]: !(prev[label] ?? true) }))
+  }
+  const isGroupOpen = (label: string) => openGroups[label] ?? true
+
+  const navItemClass = (active: boolean) =>
+    `w-full text-left px-3 py-2 rounded text-sm mb-1 border-l-4 flex items-center gap-2.5 ${active ? 'bg-null-navy2 font-semibold' : 'hover:bg-null-navy2/60'}`
+
+  const renderNavItem = (id: string, label: string) => {
+    const active = module === id
+    return (
+      <button
+        key={id}
+        onClick={() => pickModule(id)}
+        title={label}
+        aria-current={active ? 'page' : undefined}
+        className={navItemClass(active)}
+        style={{ borderLeftColor: active ? '#17C3B2' : 'transparent' }}
+      >
+        <Icon name={MODULE_ICONS[id] || 'file-text'} size={18} className="shrink-0" />
+        {!sidebarCollapsed && <span className="truncate">{label}</span>}
+      </button>
+    )
+  }
+
   if (!token) {
     return (
-      <div className="min-h-screen bg-nexus-navy flex items-center justify-center p-4">
-        <div className="nexus-card w-96">
-          <h1 className="text-2xl font-bold mb-1 text-nexus-navy dark:text-white">NEXUS</h1>
-          <p className="text-sm text-nexus-slate mb-6">Unified IT & Security Platform</p>
-          {backendStatus === 'checking' && <p className="text-sm text-nexus-slate mb-4">Checking backend…</p>}
+      <div className="min-h-screen bg-null-obsidian flex items-center justify-center p-4">
+        <div className="w-96">
+          {/* Full lockup sits on the dark backdrop, not inside the white
+              card — the chrome wordmark washes out on white. */}
+          <img src={NULL_LOGO_SRC} alt="NULL — Control the Complexity" className="w-full max-w-[320px] h-auto mx-auto mb-6" />
+          <div className="null-card w-full">
+          {backendStatus === 'checking' && <p className="text-sm text-null-muted mb-4">Checking backend…</p>}
           {backendStatus === 'unreachable' && (
             <div className="rounded p-3 mb-4 border" style={{ background: '#FBECEC', borderColor: '#E5AFB0' }}>
               <p className="text-sm font-medium" style={{ color: '#C64D4D' }}>Backend not reachable at {BACKEND_LABEL}</p>
@@ -642,30 +832,74 @@ function App() {
             </div>
           )}
           {error && <p className="text-sm mb-4" style={{ color: '#C64D4D' }}>{error}</p>}
-          <input className="nexus-input p-2 mb-3 text-sm" placeholder="Username" value={username} onChange={(e) => setUsername(e.target.value)} />
-          <input className="nexus-input p-2 mb-4 text-sm" type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} />
-          <button className="w-full bg-nexus-teal hover:bg-nexus-tealDark text-white p-2 rounded mb-2 text-sm font-medium" onClick={login}>Sign In</button>
-          <button className="w-full bg-white hover:bg-nexus-cloud border border-nexus-border p-2 rounded text-sm" onClick={register}>Create Organization</button>
-          <p className="text-xs text-nexus-slate mt-4">One sign-in opens both administrator workspaces — IT Operations and Security Operations — with no second login to switch between them.</p>
+          <input className="null-input p-2 mb-3 text-sm" placeholder="Username" value={username} onChange={(e) => setUsername(e.target.value)} />
+          <input className="null-input p-2 mb-4 text-sm" type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} />
+          <button className="w-full bg-null-teal hover:bg-null-tealDark text-white p-2 rounded mb-2 text-sm font-medium" onClick={login}>Sign In</button>
+          <button className="w-full bg-white hover:bg-null-cloud border border-null-line p-2 rounded text-sm" onClick={register}>Create Organization</button>
+          <p className="text-xs text-null-muted mt-4">One sign-in opens both administrator workspaces — IT Operations and Security Operations — with no second login to switch between them.</p>
+          </div>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen bg-nexus-cloud dark:bg-nexus-navyDeep flex" data-density={density}>
-      <aside className="w-64 bg-nexus-navy text-white flex flex-col shrink-0">
-        <div className="p-4 border-b border-white/10">
-          <h1 className="text-xl font-bold tracking-wide">NEXUS</h1>
-          <p className="text-xs" style={{ color: '#8AA0B8' }}>IT & Security Platform</p>
+    <div className="min-h-screen bg-null-cloud dark:bg-null-obsidian flex" data-density={density}>
+      <aside className="bg-null-obsidian text-white flex flex-col shrink-0" style={{ width: sidebarCollapsed ? 72 : 248 }}>
+        <div className="px-2 py-4 border-b border-white/10 flex items-center gap-2">
+          {sidebarCollapsed ? (
+            <span className="mx-auto flex h-9 w-9 items-center justify-center rounded bg-null-teal text-lg font-bold text-white" title="NULL">N</span>
+          ) : (
+            <img src={NULL_LOGO_SRC} alt="NULL — Control the Complexity" className="w-full h-auto" />
+          )}
+          {!sidebarCollapsed && (
+            <button
+              type="button"
+              onClick={() => setSidebarCollapsed(true)}
+              title="Collapse sidebar"
+              aria-label="Collapse sidebar"
+              className="shrink-0 rounded p-1.5 text-white/70 hover:bg-null-navy2 hover:text-white"
+            >
+              <Icon name="collapse" size={18} />
+            </button>
+          )}
         </div>
+        {sidebarCollapsed && (
+          <div className="flex justify-center border-b border-white/10 py-2">
+            <button
+              type="button"
+              onClick={() => setSidebarCollapsed(false)}
+              title="Expand sidebar"
+              aria-label="Expand sidebar"
+              className="rounded p-1.5 text-white/70 hover:bg-null-navy2 hover:text-white"
+            >
+              <Icon name="menu" size={18} />
+            </button>
+          </div>
+        )}
         {/* Workspace switcher — same sign-in, no re-login to switch. */}
         <div className="p-3 border-b border-white/10">
-          <p className="text-[11px] uppercase tracking-wider mb-2" style={{ color: '#8AA0B8' }}>Workspace</p>
+          {!sidebarCollapsed && <p className="text-[11px] uppercase tracking-wider mb-2" style={{ color: '#8AA0B8' }}>Workspace</p>}
           <div className="flex flex-col gap-1" role="tablist" aria-label="Administrator workspace">
             {WORKSPACES.map((w) => {
               const allowed = authorizedWorkspaces.includes(w.id)
               const active = workspace === w.id
+              if (sidebarCollapsed) {
+                return (
+                  <button
+                    key={w.id}
+                    role="tab"
+                    aria-selected={active}
+                    disabled={!allowed}
+                    onClick={() => switchWorkspace(w.id)}
+                    title={allowed ? `Switch to ${w.label} — no sign-in needed` : `Your role (${sessionUser?.role || '…'}) does not authorize ${w.label}`}
+                    className={`mx-auto flex h-9 w-9 items-center justify-center rounded text-sm font-semibold border-l-4 ${active ? 'bg-null-navy2' : 'hover:bg-null-navy2/60'} ${allowed ? '' : 'opacity-40 cursor-not-allowed'}`}
+                    style={{ borderLeftColor: active ? '#17C3B2' : 'transparent' }}
+                  >
+                    {w.label.charAt(0)}
+                  </button>
+                )
+              }
               return (
                 <button
                   key={w.id}
@@ -674,8 +908,8 @@ function App() {
                   disabled={!allowed}
                   onClick={() => switchWorkspace(w.id)}
                   title={allowed ? `Switch to ${w.label} — no sign-in needed` : `Your role (${sessionUser?.role || '…'}) does not authorize ${w.label}`}
-                  className={`w-full text-left px-3 py-2 rounded text-sm border-l-4 ${active ? 'bg-nexus-navyLight font-semibold' : 'hover:bg-nexus-navyLight/60'} ${allowed ? '' : 'opacity-40 cursor-not-allowed'}`}
-                  style={{ borderLeftColor: active ? '#167C80' : 'transparent' }}
+                  className={`w-full text-left px-3 py-2 rounded text-sm border-l-4 ${active ? 'bg-null-navy2 font-semibold' : 'hover:bg-null-navy2/60'} ${allowed ? '' : 'opacity-40 cursor-not-allowed'}`}
+                  style={{ borderLeftColor: active ? '#17C3B2' : 'transparent' }}
                 >
                   <span className="block">{w.label}</span>
                   <span className="block text-xs font-normal" style={{ color: '#8AA0B8' }}>{allowed ? w.tagline : 'Not authorized for your role'}</span>
@@ -685,131 +919,201 @@ function App() {
           </div>
         </div>
         <nav className="flex-1 overflow-y-auto p-2" aria-label={`${workspaceDef.label} navigation`}>
-          <button
-            onClick={() => pickModule('home')}
-            className={`w-full text-left px-3 py-2 rounded text-sm mb-1 border-l-4 ${module === 'home' ? 'bg-nexus-navyLight font-semibold' : 'hover:bg-nexus-navyLight/60'}`}
-            style={{ borderLeftColor: module === 'home' ? '#167C80' : 'transparent' }}
-          >
-            Home
-          </button>
-          {navModules.map((m) => (
-            <button
-              key={m.id}
-              onClick={() => pickModule(m.id)}
-              className={`w-full text-left px-3 py-2 rounded text-sm mb-1 border-l-4 ${module === m.id ? 'bg-nexus-navyLight font-semibold' : 'hover:bg-nexus-navyLight/60'}`}
-              style={{ borderLeftColor: module === m.id ? '#167C80' : 'transparent' }}
-            >
-              {m.label}
-            </button>
-          ))}
-          {navModules.length === 0 && (
+          {sidebarCollapsed ? (
+            <>
+              {renderNavItem('home', workspaceDef.homeTitle)}
+              {navModules.map((m) => renderNavItem(m.id, m.label))}
+            </>
+          ) : (
+            NAV_GROUPS[workspace].map((group) => {
+              const groupModules = group.modules
+                .map((id) => (id === 'home' ? { id: 'home', label: workspaceDef.homeTitle } : workspaceModules.find((m) => m.id === id)))
+                .filter((m): m is { id: string; label: string } => !!m && (navQuery.trim() === '' || m.id === 'home' || navModules.some((nm) => nm.id === m.id)))
+              if (groupModules.length === 0) return null
+              const open = isGroupOpen(group.label)
+              return (
+                <div key={group.label} className="mb-1">
+                  <button
+                    type="button"
+                    onClick={() => toggleGroup(group.label)}
+                    aria-expanded={open}
+                    className="flex w-full items-center justify-between px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider hover:text-white"
+                    style={{ color: '#8AA0B8' }}
+                  >
+                    <span>{group.label}</span>
+                    <Icon name="chevron-down" size={14} className={`transition-transform ${open ? '' : '-rotate-90'}`} />
+                  </button>
+                  {open && groupModules.map((m) => renderNavItem(m.id, m.label))}
+                </div>
+              )
+            })
+          )}
+          {navModules.length === 0 && !sidebarCollapsed && (
             <p className="text-xs px-3 py-2" style={{ color: '#8AA0B8' }}>No sections match “{navQuery}”.</p>
           )}
         </nav>
         <div className="p-3 border-t border-white/10 text-xs" style={{ color: '#8AA0B8' }}>
-          {sessionUser && <p className="mb-2 truncate">{sessionUser.username} · {sessionUser.role}</p>}
-          <button className="text-sm text-white/80 hover:text-white" onClick={signOut}>Sign out</button>
+          {sidebarCollapsed ? (
+            <div className="flex flex-col items-center gap-2">
+              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-null-navy2 text-white" title={sessionUser ? `${sessionUser.username} · ${sessionUser.role}` : 'Signed in'}>
+                <Icon name="user" size={16} />
+              </span>
+              <button type="button" onClick={signOut} title="Sign out" aria-label="Sign out" className="rounded p-1.5 text-white/80 hover:bg-null-navy2 hover:text-white">
+                <Icon name="x-circle" size={18} />
+              </button>
+            </div>
+          ) : (
+            <>
+              {sessionUser && <p className="mb-2 truncate">{sessionUser.username} · {sessionUser.role}</p>}
+              <button className="text-sm text-white/80 hover:text-white" onClick={signOut}>Sign out</button>
+            </>
+          )}
         </div>
       </aside>
 
       <div className="flex-1 min-w-0 flex flex-col">
         {/* Top navigation — white, subtle bottom border, slate icons. */}
-        <header className="bg-white dark:bg-[#16283F] border-b border-nexus-border dark:border-[#243A56] px-6 py-3 flex flex-wrap items-center gap-3">
+        <header className="h-16 bg-white dark:bg-null-navy2 border-b border-null-line dark:border-white/10 px-6 flex flex-wrap items-center gap-3">
           <div className="min-w-0">
-            <h2 className="text-base font-semibold font-display text-nexus-navy dark:text-white truncate">{module === 'home' ? workspaceDef.homeTitle : current?.label}</h2>
-            <p className="text-xs text-nexus-slate truncate">{workspaceDef.label} workspace</p>
+            <Breadcrumbs items={breadcrumbItems} />
           </div>
           <div className="flex-1" />
           <input
-            className="nexus-input !w-56 p-2 text-sm"
+            className="null-input !w-56 p-2 text-sm"
             placeholder={`Search ${workspaceDef.shortLabel.toLowerCase()} sections…`}
             value={navQuery}
             onChange={(e) => setNavQuery(e.target.value)}
             aria-label="Search sections in this workspace"
           />
-          <label className="text-xs text-nexus-slate flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setPaletteOpen(true)}
+            title="Command palette (Ctrl+K)"
+            aria-label="Open command palette"
+            className="flex items-center gap-1.5 rounded border border-null-line bg-white px-2.5 py-2 text-xs text-null-muted hover:bg-null-cloud dark:border-white/10 dark:bg-transparent dark:text-[#8AA0B8]"
+          >
+            <Icon name="command" size={14} />
+            <span>Ctrl+K</span>
+          </button>
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => { setBellOpen((v) => !v); setUserMenuOpen(false) }}
+              title="Notifications"
+              aria-label={`Notifications, ${attentionItems.length} needing attention`}
+              aria-expanded={bellOpen}
+              className="relative rounded p-2 text-null-muted hover:bg-null-cloud dark:text-[#8AA0B8] dark:hover:bg-white/10"
+            >
+              <Icon name="bell" size={20} />
+              {attentionItems.length > 0 && (
+                <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-null-critical px-1 text-[10px] font-bold text-white">
+                  {attentionItems.length}
+                </span>
+              )}
+            </button>
+            {bellOpen && (
+              <div className="absolute right-0 top-11 z-40 w-80 rounded-lg border border-null-line bg-white shadow-lg dark:border-white/10 dark:bg-null-navy2">
+                <p className="border-b border-null-line px-3 py-2 text-xs font-semibold uppercase tracking-wide text-null-muted dark:border-white/10 dark:text-[#8AA0B8]">Notifications</p>
+                {attentionItems.length === 0 ? (
+                  <p className="px-3 py-4 text-sm text-null-muted dark:text-[#8AA0B8]">No notifications</p>
+                ) : (
+                  <ul>
+                    {attentionItems.map((item) => (
+                      <li key={item.id}>
+                        <button
+                          type="button"
+                          onClick={() => pickModule(attentionModuleId)}
+                          className="w-full px-3 py-2 text-left text-sm hover:bg-null-cloud dark:hover:bg-white/5"
+                        >
+                          <span className="block font-medium text-null-ink dark:text-white">{displayName(item)}</span>
+                          <span className="block text-xs text-null-muted dark:text-[#8AA0B8]">{displayDetail(item)}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+          </div>
+          {/* Org selector — display only. The register flow creates the
+              tenant as "Demo Organization" and there is no endpoint
+              that returns the tenant name, so no other org can be
+              listed here without inventing one. */}
+          <span
+            className="hidden items-center gap-1.5 rounded border border-null-line px-2.5 py-2 text-xs font-medium text-null-ink md:flex dark:border-white/10 dark:text-white"
+            title="Organization — set at registration; no tenant-name endpoint exists yet"
+          >
+            <Icon name="users" size={14} />
+            Demo Organization
+          </span>
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => { setUserMenuOpen((v) => !v); setBellOpen(false) }}
+              aria-expanded={userMenuOpen}
+              aria-label="User menu"
+              className="flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-null-cloud dark:hover:bg-white/10"
+            >
+              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-null-teal text-white">
+                <Icon name="user" size={16} />
+              </span>
+              <span className="hidden text-left leading-tight lg:block">
+                <span className="block font-medium text-null-ink dark:text-white">{sessionUser?.username || '…'}</span>
+                <span className="block text-xs text-null-muted dark:text-[#8AA0B8]">{sessionUser?.role || '…'}</span>
+              </span>
+              <Icon name="chevron-down" size={14} className="text-null-muted dark:text-[#8AA0B8]" />
+            </button>
+            {userMenuOpen && (
+              <div className="absolute right-0 top-11 z-40 w-56 rounded-lg border border-null-line bg-white shadow-lg dark:border-white/10 dark:bg-null-navy2">
+                <div className="border-b border-null-line px-3 py-2 dark:border-white/10">
+                  <p className="text-sm font-medium text-null-ink dark:text-white">{sessionUser?.username}</p>
+                  <p className="text-xs text-null-muted dark:text-[#8AA0B8]">{sessionUser?.role} · Demo Organization</p>
+                </div>
+                <button type="button" onClick={signOut} className="w-full px-3 py-2 text-left text-sm text-null-ink hover:bg-null-cloud dark:text-white dark:hover:bg-white/5">
+                  Sign out
+                </button>
+              </div>
+            )}
+          </div>
+          <label className="text-xs text-null-muted flex items-center gap-1 dark:text-[#8AA0B8]">
             Density
-            <select className="nexus-input !w-auto p-1 text-xs" value={density} onChange={(e) => setDensity(e.target.value as Density)} aria-label="Display density">
+            <select className="null-input !w-auto p-1 text-xs" value={density} onChange={(e) => setDensity(e.target.value as Density)} aria-label="Display density">
               <option value="compact">Compact</option>
               <option value="comfortable">Comfortable</option>
               <option value="spacious">Spacious</option>
             </select>
           </label>
           <button
-            className="border border-nexus-border bg-white dark:bg-transparent rounded px-3 py-1.5 text-xs hover:bg-nexus-cloud"
-            onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+            className="rounded border border-null-line bg-white px-3 py-1.5 text-xs hover:bg-null-cloud dark:border-white/10 dark:bg-transparent dark:text-white"
+            onClick={toggleTheme}
             aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
           >
-            {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+            <span className="inline-flex items-center gap-1.5">
+              <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={14} />
+              {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+            </span>
           </button>
         </header>
 
         <main className="flex-1 p-6 min-w-0">
-          {module === 'home' ? (
-            <div>
-              <div className="nexus-card mb-6">
-                <h2 className="text-lg font-semibold mb-1 text-nexus-navy dark:text-white">{workspaceDef.homeTitle}</h2>
-                <p className="text-sm text-nexus-slate">{workspaceDef.homeDescription}</p>
-              </div>
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-                {workspaceDef.homeStats.map((stat) => (
-                  <div key={stat.label} className="nexus-card">
-                    <div className="text-2xl font-bold text-nexus-navy dark:text-white">{homeStats[stat.label] ?? '—'}</div>
-                    <div className="text-sm text-nexus-slate">{stat.label}</div>
-                  </div>
-                ))}
-              </div>
-              <div className="grid lg:grid-cols-2 gap-6">
-                <div className="nexus-card">
-                  <h3 className="font-semibold mb-3 text-nexus-navy dark:text-white">{workspaceDef.attentionTitle}</h3>
-                  {attentionItems.length === 0 ? (
-                    <p className="text-sm text-nexus-slate">Nothing needs attention right now.</p>
-                  ) : (
-                    <ul className="space-y-2">
-                      {attentionItems.map((item) => {
-                        const badge = statusBadgeClasses(item.severity || item.status)
-                        return (
-                          <li key={item.id} className="flex items-start justify-between gap-3 text-sm border-b border-nexus-border last:border-0 pb-2 last:pb-0">
-                            <span className="font-medium">{displayName(item)}</span>
-                            <span className="shrink-0 text-xs px-2 py-0.5 rounded-full font-medium" style={{ color: badge.color, background: badge.background }}>
-                              {displayDetail(item)}
-                            </span>
-                          </li>
-                        )
-                      })}
-                    </ul>
-                  )}
-                </div>
-                <div className="nexus-card">
-                  <h3 className="font-semibold mb-3 text-nexus-navy dark:text-white">Go to a section</h3>
-                  <div className="flex flex-wrap gap-2">
-                    {workspaceModules.map((m) => (
-                      <button key={m.id} onClick={() => pickModule(m.id)} className="px-3 py-1.5 rounded-full text-xs border border-nexus-border hover:bg-nexus-tealSoft hover:border-nexus-teal hover:text-nexus-tealDark">
-                        {m.label}
-                      </button>
-                    ))}
-                  </div>
-                  <p className="text-xs text-nexus-slate mt-4">
-                    Switch workspaces any time from the sidebar — your sign-in carries over, no second login.
-                    {authorizedWorkspaces.length < 2 && ' Your role authorizes only this workspace.'}
-                  </p>
-                </div>
-              </div>
-            </div>
+          {module === 'home' && workspace === 'operations' ? (
+            <ItOpsHome api={API} headers={headers} onNavigate={(moduleId, subsectionId) => pickModule(moduleId, subsectionId)} />
+          ) : module === 'home' ? (
+            <SecOpsHome api={API} headers={headers} onNavigate={(moduleId, subsectionId) => pickModule(moduleId, subsectionId)} />
           ) : module === 'compliance' ? (
             <GrcWorkspace api={API} headers={headers} />
           ) : current ? (
             <div>
-              <div className="nexus-card mb-6">
-                <h2 className="text-lg font-semibold mb-1 text-nexus-navy dark:text-white">{current.label}</h2>
-                <p className="text-sm text-nexus-slate mb-4">{current.description}</p>
+              <div className="null-card mb-6">
+                <h2 className="text-lg font-semibold mb-1 text-null-ink dark:text-white">{current.label}</h2>
+                <p className="text-sm text-null-muted dark:text-[#8AA0B8] mb-4">{current.description}</p>
                 {current.subsections && (
                   <div className="flex flex-wrap gap-2 mb-4">
                     {current.subsections.map((s) => (
                       <button
                         key={s.id}
                         onClick={() => setSubsection(s.id)}
-                        className={`px-3 py-1 rounded-full text-xs border ${(subsection || current.subsections![0].id) === s.id ? 'bg-nexus-teal text-white border-nexus-teal' : 'text-nexus-slateDark hover:bg-nexus-cloud'}`}
+                        className={`px-3 py-1 rounded-full text-xs border ${(subsection || current.subsections![0].id) === s.id ? 'bg-null-teal text-white border-null-teal' : 'text-null-ink hover:bg-null-cloud dark:text-[#8AA0B8]'}`}
                       >
                         {s.label}
                       </button>
@@ -818,21 +1122,21 @@ function App() {
                 )}
                 <div className="grid grid-cols-3 gap-4">
                   {Object.entries(stats).map(([k, v]) => (
-                    <div key={k} className="border border-nexus-border rounded p-4">
-                      <div className="text-2xl font-bold text-nexus-navy dark:text-white">{String(v)}</div>
-                      <div className="text-sm text-nexus-slate capitalize">{k}</div>
+                    <div key={k} className="border border-null-line rounded p-4">
+                      <div className="text-2xl font-bold text-null-ink dark:text-white">{String(v)}</div>
+                      <div className="text-sm text-null-muted dark:text-[#8AA0B8] capitalize">{k}</div>
                     </div>
                   ))}
-                  {Object.keys(stats).length === 0 && <div className="text-nexus-slate">No stats yet</div>}
+                  {Object.keys(stats).length === 0 && <div className="text-null-muted dark:text-[#8AA0B8]">No stats yet</div>}
                 </div>
                 {/* The scheduler endpoint is read-only (runs list only),
                     so there is no Add box here — just the Run now button. */}
                 {module !== 'scheduler' && canWrite && (
                   <div className="flex gap-2 mt-4">
-                    <input className="nexus-input flex-1 p-2 text-sm" placeholder={editingId ? 'Edit record name / title' : 'New record name / title'} value={newName} onChange={(e) => setNewName(e.target.value)} />
-                    <button className="bg-nexus-teal hover:bg-nexus-tealDark text-white px-4 rounded text-sm font-medium" onClick={createItem}>{editingId ? 'Save' : 'Add'}</button>
+                    <input className="null-input flex-1 p-2 text-sm" placeholder={editingId ? 'Edit record name / title' : 'New record name / title'} value={newName} onChange={(e) => setNewName(e.target.value)} />
+                    <button className="bg-null-teal hover:bg-null-tealDark text-white px-4 rounded text-sm font-medium" onClick={createItem}>{editingId ? 'Save' : 'Add'}</button>
                     {editingId && (
-                      <button className="border border-nexus-border rounded px-4 text-sm" onClick={cancelEdit}>Cancel</button>
+                      <button className="border border-null-line rounded px-4 text-sm" onClick={cancelEdit}>Cancel</button>
                     )}
                   </div>
                 )}
@@ -841,16 +1145,15 @@ function App() {
                     <button className="text-white px-4 rounded text-sm font-medium" style={{ background: '#218568' }} onClick={runSchedulerNow}>Run now</button>
                   </div>
                 )}
-                {notice && <p className="text-sm text-nexus-slate mt-2">{notice}</p>}
               </div>
-              <div className="nexus-card">
-                <h3 className="font-semibold mb-3 text-nexus-navy dark:text-white">Items</h3>
+              <div className="null-card">
+                <h3 className="font-semibold mb-3 text-null-ink dark:text-white">Items</h3>
                 {items.length === 0 ? (
-                  <p className="text-nexus-slate">No records yet. Add one above, or ingest data from an enrolled endpoint agent.</p>
+                  <p className="text-null-muted dark:text-[#8AA0B8]">No records yet. Add one above, or ingest data from an enrolled endpoint agent.</p>
                 ) : (
                   <table className="w-full text-sm">
                     <thead>
-                      <tr className="text-left text-nexus-slate border-b border-nexus-border">
+                      <tr className="text-left text-null-muted border-b border-null-line dark:text-[#8AA0B8]">
                         <th className="py-2 pr-2">Name</th>
                         <th className="py-2 pr-2">Detail</th>
                         <th className="py-2 pr-2">Status</th>
@@ -864,9 +1167,9 @@ function App() {
                         const effStatus = item.status || item.enrollment_status || ''
                         const badge = statusBadgeClasses(item.severity || effStatus)
                         return (
-                          <tr key={item.id} className="nexus-table-row border-b border-nexus-border align-top">
+                          <tr key={item.id} className="null-table-row border-b border-null-line align-top">
                             <td className="py-2 pr-2 font-medium">{displayName(item)}</td>
-                            <td className="py-2 pr-2 text-nexus-slate">
+                            <td className="py-2 pr-2 text-null-muted dark:text-[#8AA0B8]">
                               {displayDetail(item)}
                               {item.severity && (
                                 <span className="ml-2 text-xs px-2 py-0.5 rounded-full font-medium" style={{ color: badge.color, background: badge.background }}>
@@ -883,7 +1186,7 @@ function App() {
                                 <span className="inline-flex items-center gap-1.5">
                                   <span className="inline-block w-2 h-2 rounded-full" style={{ background: statusBadgeClasses(effStatus).color }} title={`Status tone: ${statusTone(effStatus)}`} />
                                   <select
-                                    className="nexus-input !w-auto px-2 py-1 text-xs"
+                                    className="null-input !w-auto px-2 py-1 text-xs"
                                     value={effStatus}
                                     onChange={(e) => setStatus(item, e.target.value)}
                                     aria-label={`Status for ${displayName(item)}`}
@@ -900,13 +1203,13 @@ function App() {
                             <td className="py-2">
                               <div className="flex flex-wrap gap-1">
                                 {workflowButtons(item).map((b) => (
-                                  <button key={b.action} className="border border-nexus-border rounded px-2 py-1 text-xs hover:bg-nexus-cloud" onClick={() => workflowAction(b.action, item)}>{b.label}</button>
+                                  <button key={b.action} className="border border-null-line rounded px-2 py-1 text-xs hover:bg-null-cloud" onClick={() => workflowAction(b.action, item)}>{b.label}</button>
                                 ))}
                                 {canWrite && module !== 'scheduler' && (
-                                  <button className="border border-nexus-border rounded px-2 py-1 text-xs hover:bg-nexus-cloud" onClick={() => editItem(item)}>Edit</button>
+                                  <button className="border border-null-line rounded px-2 py-1 text-xs hover:bg-null-cloud" onClick={() => editItem(item)}>Edit</button>
                                 )}
                                 {canDelete && module !== 'scheduler' && (
-                                  <button className="border rounded px-2 py-1 text-xs hover:bg-nexus-cloud" style={{ borderColor: '#E5AFB0', color: '#C64D4D' }} onClick={() => deleteItem(item)}>Delete</button>
+                                  <button className="border rounded px-2 py-1 text-xs hover:bg-null-cloud" style={{ borderColor: '#E5AFB0', color: '#C64D4D' }} onClick={() => deleteItem(item)}>Delete</button>
                                 )}
                               </div>
                             </td>
@@ -921,7 +1224,58 @@ function App() {
           ) : null}
         </main>
       </div>
+
+      {paletteOpen && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 pt-24" onClick={() => setPaletteOpen(false)}>
+          <div
+            className="w-full max-w-lg overflow-hidden rounded-xl border border-null-line bg-white shadow-2xl dark:border-white/10 dark:bg-null-navy2"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-label="Command palette"
+          >
+            <div className="flex items-center gap-2 border-b border-null-line px-4 py-3 dark:border-white/10">
+              <Icon name="search" size={18} className="shrink-0 text-null-muted dark:text-[#8AA0B8]" />
+              <input
+                ref={paletteInputRef}
+                className="flex-1 bg-transparent text-sm text-null-ink outline-none dark:text-white"
+                placeholder="Search sections and actions…"
+                value={paletteQuery}
+                onChange={(e) => { setPaletteQuery(e.target.value); setPaletteIndex(0) }}
+                onKeyDown={onPaletteKeyDown}
+                aria-label="Search sections and actions"
+              />
+              <kbd className="rounded border border-null-line px-1.5 py-0.5 text-[11px] text-null-muted dark:border-white/10 dark:text-[#8AA0B8]">ESC</kbd>
+            </div>
+            <ul className="max-h-80 overflow-y-auto py-1">
+              {paletteFiltered.length === 0 && (
+                <li className="px-4 py-3 text-sm text-null-muted dark:text-[#8AA0B8]">No matches.</li>
+              )}
+              {paletteFiltered.map((entry, i) => (
+                <li key={entry.id}>
+                  <button
+                    type="button"
+                    onMouseEnter={() => setPaletteIndex(i)}
+                    onClick={() => entry.run()}
+                    className={`flex w-full items-center justify-between gap-3 px-4 py-2 text-left text-sm ${i === paletteIndex ? 'bg-null-tealSoft dark:bg-white/10' : ''}`}
+                  >
+                    <span className="font-medium text-null-ink dark:text-white">{entry.label}</span>
+                    <span className="text-xs text-null-muted dark:text-[#8AA0B8]">{entry.detail}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
     </div>
+  )
+}
+
+function App() {
+  return (
+    <ToastProvider>
+      <Console />
+    </ToastProvider>
   )
 }
 
