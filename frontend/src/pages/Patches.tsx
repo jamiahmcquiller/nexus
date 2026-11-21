@@ -193,7 +193,7 @@ function NewDeployment({ open, onClose, patches, groups, onDone }: { open: boole
         </Field>
         <Field label="Schedule" hint="Leave blank to schedule it for now, then use Run now."><input type="datetime-local" className={inputClass} value={when} onChange={e => setWhen(e.target.value)} /></Field>
         {error && <p className="text-sm text-red-600">{error}</p>}
-        <div className="flex justify-end gap-2"><Button variant="ghost" onClick={onClose}>Cancel</Button><Button onClick={submit}>Schedule deployment</Button></div>
+        <div className="flex justify-end gap-2"><Button variant="ghost" className="text-slate-600" onClick={onClose}>Cancel</Button><Button onClick={submit}>Schedule deployment</Button></div>
       </div>
     </Modal>
   )
@@ -226,7 +226,7 @@ function NewPolicy({ open, onClose, onDone }: { open: boolean; onClose: () => vo
           </select>
         </Field>
         <Field label="Applies to"><input className={inputClass} value={form.target} onChange={set('target')} /></Field>
-        <div className="flex justify-end gap-2"><Button variant="ghost" onClick={onClose}>Cancel</Button><Button onClick={submit}>Create policy</Button></div>
+        <div className="flex justify-end gap-2"><Button variant="ghost" className="text-slate-600" onClick={onClose}>Cancel</Button><Button onClick={submit}>Create policy</Button></div>
       </div>
     </Modal>
   )

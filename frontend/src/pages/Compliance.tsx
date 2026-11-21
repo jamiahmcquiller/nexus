@@ -178,7 +178,7 @@ function ControlModal({ control, onClose, onDone }: { control: Control | null; o
         <Field label={control.mode === 'auto' ? 'Notes' : 'Evidence'} hint="Where the proof lives and what it shows.">
           <textarea className={inputClass} rows={3} value={form.evidence} onChange={e => setForm(f => ({ ...f, evidence: e.target.value }))} />
         </Field>
-        <div className="flex justify-end gap-2"><Button variant="ghost" onClick={onClose}>Cancel</Button><Button onClick={save}>Save</Button></div>
+        <div className="flex justify-end gap-2"><Button variant="ghost" className="text-slate-600" onClick={onClose}>Cancel</Button><Button onClick={save}>Save</Button></div>
       </div>
     </Modal>
   )
@@ -210,7 +210,7 @@ function RiskModal({ risk, onClose, onDone }: { risk: Partial<Risk> | null; onCl
           <Field label="Status"><select className={inputClass} value={f.status} onChange={set('status')}>{['open', 'mitigating', 'accepted', 'closed'].map(s => <option key={s} value={s} className="capitalize">{s}</option>)}</select></Field>
         </div>
         <Field label="Treatment plan"><textarea className={inputClass} rows={2} value={f.treatment ?? ''} onChange={set('treatment')} /></Field>
-        <div className="flex justify-end gap-2"><Button variant="ghost" onClick={onClose}>Cancel</Button><Button onClick={save}>Save risk</Button></div>
+        <div className="flex justify-end gap-2"><Button variant="ghost" className="text-slate-600" onClick={onClose}>Cancel</Button><Button onClick={save}>Save risk</Button></div>
       </div>
     </Modal>
   )

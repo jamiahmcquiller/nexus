@@ -76,7 +76,7 @@ export default function Enroll() {
                 </div>
                 <div className="flex gap-3">
                   <Button variant="secondary" onClick={generate}>Create a new code</Button>
-                  <Link to="/endpoints"><Button variant="ghost">View all devices</Button></Link>
+                  <Link to="/endpoints"><Button variant="ghost" className="text-slate-600">View all devices</Button></Link>
                 </div>
               </div>
             )}

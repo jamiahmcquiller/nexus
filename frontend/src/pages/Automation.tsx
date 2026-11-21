@@ -175,7 +175,7 @@ function NewWorkflow({ open, groups, onClose, onDone }: { open: boolean; groups:
         <Field label="How often"><select className={inputClass} value={schedule} onChange={e => setSchedule(e.target.value)}>
           {['Every hour', 'Daily at 6:00 AM', 'Weekly on Monday', 'Manual only'].map(x => <option key={x}>{x}</option>)}</select></Field>
         {error && <p className="text-sm text-red-600">{error}</p>}
-        <div className="flex justify-end gap-2"><Button variant="ghost" onClick={onClose}>Cancel</Button><Button onClick={submit}>Create workflow</Button></div>
+        <div className="flex justify-end gap-2"><Button variant="ghost" className="text-slate-600" onClick={onClose}>Cancel</Button><Button onClick={submit}>Create workflow</Button></div>
       </div>
     </Modal>
   )

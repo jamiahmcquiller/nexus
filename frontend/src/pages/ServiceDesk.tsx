@@ -147,7 +147,7 @@ export function NewTicket({ open, onClose, onDone, portal, deviceId }: { open: b
           </select>
         </Field>
         {error && <p className="text-sm text-red-600">{error}</p>}
-        <div className="flex justify-end gap-2"><Button variant="ghost" onClick={onClose}>Cancel</Button><Button onClick={submit}>Create ticket</Button></div>
+        <div className="flex justify-end gap-2"><Button variant="ghost" className="text-slate-600" onClick={onClose}>Cancel</Button><Button onClick={submit}>Create ticket</Button></div>
       </div>
     </Modal>
   )

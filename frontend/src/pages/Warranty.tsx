@@ -158,7 +158,7 @@ export function WarrantyModal({ row, coverage, onClose, onDone }: { row: { id: s
         </div>
         <Field label="Notes"><textarea className={inputClass} rows={2} value={f.notes ?? ''} onChange={set('notes')} /></Field>
         {error && <p className="text-sm text-red-600">{error}</p>}
-        <div className="flex justify-end gap-2"><Button variant="ghost" onClick={onClose}>Cancel</Button><Button onClick={save}>Save warranty</Button></div>
+        <div className="flex justify-end gap-2"><Button variant="ghost" className="text-slate-600" onClick={onClose}>Cancel</Button><Button onClick={save}>Save warranty</Button></div>
       </div>
     </Modal>
   )
