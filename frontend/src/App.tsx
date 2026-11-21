@@ -1,131 +1,37 @@
-import { useState, useEffect } from 'react'
-import axios from 'axios'
+import type { ReactNode } from 'react'
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import Layout from './components/Layout'
+import Login from './pages/Login'
+import Overview from './pages/Overview'
+import Endpoints from './pages/Endpoints'
+import DeviceProfile from './pages/DeviceProfile'
+import Enroll from './pages/Enroll'
+import Groups from './pages/Groups'
+import ComingSoon, { MODULES } from './pages/ComingSoon'
 
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8000'
-
-function App() {
-  const [stats, setStats] = useState({ total: 0, online: 0, stale: 0 })
-  const [devices, setDevices] = useState<any[]>([])
-  const [token, setToken] = useState(localStorage.getItem('nexus_token') || '')
-  const [username, setUsername] = useState('')
-  const [password, setPassword] = useState('')
-  const [error, setError] = useState('')
-
-  const headers = token ? { Authorization: `Bearer ${token}` } : {}
-
-  useEffect(() => {
-    if (token) {
-      axios.get(`${API}/api/v1/devices/stats`, { headers })
-        .then(r => setStats(r.data))
-        .catch(() => setError('Failed to load stats'))
-      axios.get(`${API}/api/v1/devices/`, { headers })
-        .then(r => setDevices(r.data))
-        .catch(() => {})
-    }
-  }, [token])
-
-  const login = async () => {
-    try {
-      const res = await axios.post(`${API}/api/v1/auth/token`, { username, password })
-      const t = res.data.access_token
-      setToken(t)
-      localStorage.setItem('nexus_token', t)
-      setError('')
-    } catch {
-      setError('Login failed')
-    }
-  }
-
-  const register = async () => {
-    try {
-      const res = await axios.post(`${API}/api/v1/auth/register`, {
-        tenant_name: 'Demo Organization',
-        username,
-        password,
-      })
-      const t = res.data.access_token
-      setToken(t)
-      localStorage.setItem('nexus_token', t)
-      setError('')
-    } catch {
-      setError('Registration failed')
-    }
-  }
-
-  if (!token) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="bg-white p-8 rounded-lg shadow w-96">
-          <h1 className="text-2xl font-semibold mb-2">NEXUS</h1>
-          <p className="text-sm text-gray-500 mb-6">Sign in to the console</p>
-          {error && <p className="text-red-600 text-sm mb-4">{error}</p>}
-          <input className="w-full border p-2 mb-3 rounded" placeholder="Username" value={username} onChange={e => setUsername(e.target.value)} />
-          <input className="w-full border p-2 mb-4 rounded" type="password" placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} />
-          <button className="w-full bg-blue-600 text-white p-2 rounded mb-2" onClick={login}>Sign In</button>
-          <button className="w-full border p-2 rounded" onClick={register}>Create Organization</button>
-        </div>
-      </div>
-    )
-  }
-
-  return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b border-gray-200 px-6 py-4 flex justify-between items-center">
-        <div>
-          <h1 className="text-2xl font-semibold text-gray-900">NEXUS</h1>
-          <p className="text-sm text-gray-500">IT Operations & Security Management</p>
-        </div>
-        <button className="text-sm text-gray-600" onClick={() => { setToken(''); localStorage.removeItem('nexus_token') }}>Sign out</button>
-      </header>
-      <main className="p-6">
-        <div className="bg-white rounded-lg shadow p-6 mb-6">
-          <h2 className="text-lg font-medium mb-4">Dashboard</h2>
-          <div className="grid grid-cols-3 gap-4">
-            <div className="border rounded p-4">
-              <div className="text-2xl font-bold">{stats.total}</div>
-              <div className="text-sm text-gray-500">Endpoints</div>
-            </div>
-            <div className="border rounded p-4">
-              <div className="text-2xl font-bold text-green-600">{stats.online}</div>
-              <div className="text-sm text-gray-500">Online</div>
-            </div>
-            <div className="border rounded p-4">
-              <div className="text-2xl font-bold text-amber-600">{stats.stale}</div>
-              <div className="text-sm text-gray-500">Stale</div>
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white rounded-lg shadow p-6">
-          <h2 className="text-lg font-medium mb-4">Endpoints</h2>
-          {devices.length === 0 ? (
-            <p className="text-gray-500">No devices enrolled yet.</p>
-          ) : (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b text-left">
-                  <th className="pb-2">Hostname</th>
-                  <th className="pb-2">Device ID</th>
-                  <th className="pb-2">Last Check-in</th>
-                  <th className="pb-2">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {devices.map(d => (
-                  <tr key={d.id} className="border-b">
-                    <td className="py-2">{d.hostname || '—'}</td>
-                    <td className="py-2 font-mono text-xs">{d.device_id}</td>
-                    <td className="py-2">{d.last_checkin_at ? new Date(d.last_checkin_at).toLocaleString() : '—'}</td>
-                    <td className="py-2">{d.enrollment_status}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      </main>
-    </div>
-  )
+function RequireAuth({ children }: { children: ReactNode }) {
+  return localStorage.getItem('nexus_token') ? <>{children}</> : <Navigate to="/login" replace />
 }
 
-export default App
+export default function App() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route element={<RequireAuth><Layout /></RequireAuth>}>
+          <Route index element={<Overview />} />
+          <Route path="endpoints" element={<Endpoints />} />
+          <Route path="endpoints/groups" element={<Groups />} />
+          <Route path="endpoints/enroll" element={<Enroll />} />
+          <Route path="endpoints/:id" element={<DeviceProfile />} />
+          {['patches', 'vulnerabilities', 'software', 'service-desk', 'automation', 'compliance', 'reports'].map(k => (
+            <Route key={k} path={k} element={<ComingSoon module={MODULES[k]} />} />
+          ))}
+          <Route path="admin/users" element={<ComingSoon module={MODULES.users} />} />
+          <Route path="admin/settings" element={<ComingSoon module={MODULES.settings} />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Route>
+      </Routes>
+    </BrowserRouter>
+  )
+}
