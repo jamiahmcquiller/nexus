@@ -473,7 +473,9 @@ export function EndpointDetailDrawer({
               <Section title="Hardware & OS" icon={<Icon name="settings" size={16} />}>
                 {inventory ? (
                   <>
-                    <Row label="CPU" value={cpu?.model ? `${cpu.model} · ${cpu.count ?? '?'} cores` : 'Not reported'} />
+                    {/* The iPhone reports a live processor count but no chip model name
+                        (no action returns it) — render count-only rather than "Not reported". */}
+                    <Row label="CPU" value={cpu?.model ? `${cpu.model} · ${cpu.count ?? '?'} cores` : cpu?.count != null ? `${cpu.count} cores` : 'Not reported'} />
                     <Row label="Memory" value={formatBytesGb(memoryMb)} />
                     <Row
                       label="Operating system"
