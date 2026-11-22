@@ -277,6 +277,41 @@ export function EndpointDetailDrawer({
   const cpu = hardware?.cpu ?? device?.attributes?.cpu ?? {}
   const memoryMb = hardware?.memory?.total_mb ?? device?.attributes?.memory?.total_mb
   const mac = firstMac(hardware)
+  // MDM device information — the fields a mobile-device-management
+  // server collects with its DeviceInformation query (Apple MDM
+  // protocol): model name/number, serial, modem firmware, carrier,
+  // radio MACs, IMEI/ICCID, supervision, battery, installed-app
+  // count. iOS exposes none of these to Shortcuts, so an iPhone
+  // reports them as values copied from Settings → General → About
+  // into the scan's hardware.mdm dictionary; the drawer renders them
+  // only when the snapshot carries them, so devices without an mdm
+  // block (the Mac) are unaffected. Songs/videos/photos are
+  // deliberately NOT part of this block — they are media counts,
+  // not MDM device information. OS version and storage capacity are
+  // already shown in Hardware & OS / Disks, so they are not repeated
+  // here even when the mdm block carries them.
+  const mdm: Record<string, any> =
+    hardware?.mdm && typeof hardware.mdm === 'object' ? hardware.mdm : {}
+  const mdmAppCount = typeof mdm?.installed_applications_count === 'number' ? mdm.installed_applications_count : null
+  const appCount = software.length > 0 ? software.length : (mdmAppCount ?? 0)
+  const mdmRows: Array<{ label: string; value: string }> = []
+  if (typeof mdm?.model_name === 'string' && mdm.model_name) mdmRows.push({ label: 'Model name', value: mdm.model_name })
+  if (typeof mdm?.model === 'string' && mdm.model) mdmRows.push({ label: 'Model number', value: mdm.model })
+  if (typeof mdm?.serial_number === 'string' && mdm.serial_number) mdmRows.push({ label: 'Serial number', value: mdm.serial_number })
+  if (typeof mdm?.modem_firmware_version === 'string' && mdm.modem_firmware_version) mdmRows.push({ label: 'Modem firmware', value: mdm.modem_firmware_version })
+  if (typeof mdm?.carrier === 'string' && mdm.carrier) mdmRows.push({ label: 'Carrier', value: mdm.carrier })
+  if (typeof mdm?.carrier_settings_version === 'string' && mdm.carrier_settings_version) mdmRows.push({ label: 'Carrier settings', value: mdm.carrier_settings_version })
+  if (typeof mdm?.wifi_mac === 'string' && mdm.wifi_mac) mdmRows.push({ label: 'Wi-Fi MAC', value: mdm.wifi_mac })
+  if (typeof mdm?.bluetooth_mac === 'string' && mdm.bluetooth_mac) mdmRows.push({ label: 'Bluetooth MAC', value: mdm.bluetooth_mac })
+  if (typeof mdm?.imei === 'string' && mdm.imei) mdmRows.push({ label: 'IMEI', value: mdm.imei })
+  if (typeof mdm?.iccid === 'string' && mdm.iccid) mdmRows.push({ label: 'ICCID', value: mdm.iccid })
+  if (typeof mdm?.is_supervised === 'boolean') mdmRows.push({ label: 'Supervised', value: mdm.is_supervised ? 'Yes' : 'No' })
+  if (typeof mdm?.battery_level === 'number') {
+    // Shortcuts' Get Battery Level and MDM's BatteryLevel are both a
+    // 0–1 ratio; tolerate a 0–100 percent value if one is ever sent.
+    const pct = mdm.battery_level > 1 ? mdm.battery_level : mdm.battery_level * 100
+    mdmRows.push({ label: 'Battery level', value: `${Math.round(pct)}%` })
+  }
   const isDemo = device?.is_demo === true
   const versionsMissing = software.length > 0 && software.every((s: any) => !String(s?.version ?? '').trim())
   // The Mac's snapshot reports 4 disk entries for a single SSD
@@ -492,11 +527,33 @@ export function EndpointDetailDrawer({
                 )}
               </Section>
 
+              {/* 2b — MDM device information. Only when the snapshot carries it. */}
+              {mdmRows.length > 0 && (
+                <Section title="Device information (MDM)" icon={<Icon name="shield" size={16} />}>
+                  {mdmRows.map((r) => (
+                    <Row key={r.label} label={r.label} value={<span className="font-mono">{r.value}</span>} />
+                  ))}
+                  <p className="mt-2 text-xs text-null-muted dark:text-[#8AA0B8]">
+                    The fields a mobile-device-management server collects with its DeviceInformation query.
+                    iOS does not expose these to Shortcuts, so they are reported as values copied from
+                    Settings → General → About — they do not update on their own. Only MDM device
+                    information is collected here; media counts (songs, videos, photos) are not MDM fields.
+                  </p>
+                </Section>
+              )}
+
               {/* 3 — Applications from the latest snapshot. */}
-              <Section title={`Applications (${software.length})`} icon={<Icon name="download" size={16} />}>
+              <Section title={`Applications (${appCount})`} icon={<Icon name="download" size={16} />}>
                 {inventory ? (
                   software.length === 0 ? (
-                    <EmptyState icon="download" title="No applications reported" description="The latest inventory snapshot contains no software entries." />
+                    mdmAppCount != null ? (
+                      <p className="text-sm text-null-muted dark:text-[#8AA0B8]">
+                        {mdmAppCount} installed applications reported by the device (count only). iOS does not
+                        expose the installed-app list to Shortcuts, so names cannot be shown.
+                      </p>
+                    ) : (
+                      <EmptyState icon="download" title="No applications reported" description="The latest inventory snapshot contains no software entries." />
+                    )
                   ) : (
                     <>
                       <ul className="grid grid-cols-1 gap-1 sm:grid-cols-2">

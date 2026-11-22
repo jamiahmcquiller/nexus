@@ -232,7 +232,18 @@ def upload_inventory(device_id: str, req: InventoryUpload,
     # buckets the enrollment chart on it. last_inventory_at above is
     # the freshness marker for the latest snapshot.
     attrs["os"] = req.os
-    attrs["software"] = len(req.software or [])
+    # App count: the software list when the agent reports one. For an
+    # iPhone the list is unobtainable (iOS exposes no installed-app
+    # list to Shortcuts or any app), so fall back to the MDM-reported
+    # count from the scan (hardware.mdm.installed_applications_count)
+    # when the list is empty. That count comes from the device's own
+    # Settings, not an invention — and the drawer labels it count-only.
+    if req.software:
+        attrs["software"] = len(req.software)
+    else:
+        mdm = req.hardware.get("mdm") if isinstance(req.hardware, dict) else None
+        mdm_apps = mdm.get("installed_applications_count") if isinstance(mdm, dict) else None
+        attrs["software"] = int(mdm_apps) if isinstance(mdm_apps, (int, float)) and mdm_apps >= 0 else 0
     disks = req.hardware.get("disks") if isinstance(req.hardware, dict) else None
     if isinstance(disks, list):
         attrs["disks"] = len(disks)
